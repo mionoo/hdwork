@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+local_agent/node_modules/
+
+# Secrets and local configuration
+.env
+local_agent/.env
+
+# Generated files and macOS metadata
+.DS_Store
+uploads/results/*
+!uploads/results/.gitkeep

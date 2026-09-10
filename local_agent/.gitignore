@@ -1,0 +1,3 @@
+node_modules/
+data/agent-config.json
+data/known_hosts.json
