@@ -1,7 +1,5 @@
 const pool = require("../config/database");
-const telegramRepository = require("../repositories/telegram.repository");
-const telegramService = require("../services/telegram.service");
-const { formatAlarmMessage } = require("../services/cacti-alarm.service");
+const { recordCollectorHealth } = require("../services/cacti-scheduler.service");
 
 async function receiveCacti(req, res, next) {
   try {
@@ -10,7 +8,8 @@ async function receiveCacti(req, res, next) {
       customer_type,
       collector,
       scans = [],
-      devices = []
+      devices = [],
+      health = {},
     } = req.body;
 
     if (!customer_type) {
@@ -110,11 +109,12 @@ async function receiveCacti(req, res, next) {
               olt_ip,
               slot_port,
               alarm_status,
+              last_cacti_check,
               alarm_state,
               first_seen_at,
               last_seen_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', NOW(), NOW())
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', NOW(), NOW())
             `,
             [
               source,
@@ -124,7 +124,8 @@ async function receiveCacti(req, res, next) {
               device.group || null,
               device.olt_ip || null,
               device.slot_port || null,
-              device.status || null
+              device.status || null,
+              device.last_cek_cacty || null,
             ]
           );
 
@@ -146,6 +147,7 @@ async function receiveCacti(req, res, next) {
               olt_ip = ?,
               slot_port = ?,
               alarm_status = ?,
+              last_cacti_check = ?,
               alarm_state = 'ACTIVE',
               first_seen_at = NOW(),
               last_seen_at = NOW(),
@@ -157,6 +159,7 @@ async function receiveCacti(req, res, next) {
               device.olt_ip || null,
               device.slot_port || null,
               device.status || null,
+              device.last_cek_cacty || null,
               existing.id
             ]
           );
@@ -177,6 +180,7 @@ async function receiveCacti(req, res, next) {
             olt_ip = ?,
             slot_port = ?,
             alarm_status = ?,
+            last_cacti_check = ?,
             last_seen_at = NOW()
           WHERE id = ?
           `,
@@ -185,6 +189,7 @@ async function receiveCacti(req, res, next) {
             device.olt_ip || null,
             device.slot_port || null,
             device.status || null,
+            device.last_cek_cacty || null,
             existing.id
           ]
         );
@@ -227,24 +232,7 @@ async function receiveCacti(req, res, next) {
       }
     }
 
-    let notification = { attempted: false, delivered: false, reason: null };
-
-    if (result.new.length > 0) {
-      const destination = await telegramRepository.getAlarmDestination(customer_type);
-
-      if (!destination) {
-        notification.reason = "Tujuan alarm Telegram belum terdaftar";
-      } else {
-        notification.attempted = true;
-        const delivery = await telegramService.sendMessage(
-          destination.telegram_chat_id,
-          formatAlarmMessage(customer_type, result.new),
-          destination.telegram_thread_id,
-        );
-        notification.delivered = delivery.delivered;
-        notification.reason = delivery.error;
-      }
-    }
+    await recordCollectorHealth({ collector, customerType: customer_type, health, scans });
 
     console.log("CACTI RESULT:", {
       customer_type,
@@ -253,7 +241,6 @@ async function receiveCacti(req, res, next) {
       existing: result.existing.length,
       recovered: result.recovered.length,
       skipped_servers: result.skipped_servers,
-      notification,
     });
 
     return res.json({
@@ -270,7 +257,6 @@ async function receiveCacti(req, res, next) {
       },
 
       result,
-      notification,
     });
 
   } catch (error) {
