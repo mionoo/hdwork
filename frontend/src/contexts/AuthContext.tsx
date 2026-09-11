@@ -7,6 +7,7 @@ import {
 } from "react"
 import { useNavigate } from "react-router-dom"
 import { clearTerminalRecovery, TERMINAL_LOGOUT_EVENT } from "@/lib/terminal-session"
+import { API_URL } from "@/config/api"
 
 type User = {
   id: number
@@ -86,7 +87,7 @@ export function AuthProvider({
     window.dispatchEvent(new Event(TERMINAL_LOGOUT_EVENT))
     clearTerminalRecovery()
     // Also close detached sessions if the terminal socket is reconnecting.
-    if (closingToken) void fetch("http://localhost:3090/api/network/terminal/logout", {
+    if (closingToken) void fetch(`${API_URL}/network/terminal/logout`, {
       method: "POST",
       headers: { Authorization: "Bearer " + closingToken },
       keepalive: true,

@@ -1,9 +1,11 @@
+require("dotenv").config();
+
 const express = require("express");
 const networkRoutes = require("./routes/network.routes");
 const { connectAgent } = require("./socket/agent.socket");
 
 const app = express();
-const PORT = 5050;
+const PORT = Number(process.env.PORT) || 5050;
 
 app.use(express.json());
 

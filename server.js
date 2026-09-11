@@ -10,9 +10,10 @@ const realtimeService = require("./src/services/realtime.service");
 const agentRealtimeService = require("./src/services/agent-realtime.service");
 const terminalRealtimeService = require("./src/services/terminal-realtime.service");
 
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3090;
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:5173";
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "http://localhost:5173" } });
+const io = new Server(server, { cors: { origin: FRONTEND_ORIGIN } });
 
 io.use((socket, next) => {
   try {

@@ -1,3 +1,5 @@
+import { API_URL } from "@/config/api"
+
 export type AttendanceBreak = {
   id: number
   break_start_at: string
@@ -24,7 +26,7 @@ async function requestAttendance(
   method: "GET" | "POST" = "GET",
 ) {
   const response = await fetch(
-    `http://localhost:3090/api/attendance${path}`,
+    `${API_URL}/attendance${path}`,
     {
       method,
       headers: {

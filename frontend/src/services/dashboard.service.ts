@@ -1,3 +1,5 @@
+import { API_URL } from "@/config/api"
+
 export type DashboardSummary = {
   waiting: number
   in_progress: number
@@ -35,7 +37,7 @@ export type AdminReport = {
 }
 
 async function dashboardRequest<T>(token: string, path: string): Promise<T> {
-  const response = await fetch(`http://localhost:3090/api/dashboard/${path}`, {
+  const response = await fetch(`${API_URL}/dashboard/${path}`, {
     headers: { Authorization: `Bearer ${token}` },
   })
 

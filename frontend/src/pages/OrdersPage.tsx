@@ -4,6 +4,7 @@ import {
 } from "react"
 import { MessageSquare } from "lucide-react"
 import { io } from "socket.io-client"
+import { API_BASE_URL } from "@/config/api"
 
 import { useNavigate } from "react-router-dom"
 
@@ -128,7 +129,7 @@ export default function OrdersPage() {
   useEffect(() => {
     if (!token) return
 
-    const socket = io("http://localhost:3090", { auth: { token } })
+    const socket = io(API_BASE_URL, { auth: { token } })
     const refreshOrders = () => loadOrders()
 
     socket.on("orders:changed", refreshOrders)

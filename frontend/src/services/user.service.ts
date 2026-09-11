@@ -1,9 +1,11 @@
+import { API_URL } from "@/config/api"
+
 export type ManagedUser = { id:number; name:string; username:string; role:"HD"|"ADMIN"|"SUPER_ADMIN"; city_id:number; city_name:string; is_active:boolean; segment_ids:number[]; segments:string }
 export type UserOptions = { cities:Array<{id:number;name:string}>; segments:Array<{id:number;code:string}>; roles:string[] }
 export type UserPayload = { name:string; username:string; password?:string; role:string; city_id:number; is_active:boolean; segment_ids:number[] }
 
 async function request<T>(token:string, path:string, init:RequestInit = {}): Promise<T> {
-  const response = await fetch(`http://localhost:3090/api/users${path}`, { ...init, headers:{ Authorization:`Bearer ${token}`, "Content-Type":"application/json", ...(init.headers || {}) } })
+  const response = await fetch(`${API_URL}/users${path}`, { ...init, headers:{ Authorization:`Bearer ${token}`, "Content-Type":"application/json", ...(init.headers || {}) } })
   const result = await response.json()
   if (!response.ok) throw new Error(result.message || "Gagal memproses user")
   return result.data as T

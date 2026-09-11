@@ -1,3 +1,5 @@
+import { API_URL } from "@/config/api"
+
 export type Order = {
   id: number
   ticket_number: string | null
@@ -59,7 +61,7 @@ export async function getOrders(
   const queryString = query.toString()
 
   const response = await fetch(
-    `http://localhost:3090/api/orders${queryString ? `?${queryString}` : ""}`,
+    `${API_URL}/orders${queryString ? `?${queryString}` : ""}`,
     {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -84,7 +86,7 @@ export async function getOrderRawMessage(
   orderId: number,
 ): Promise<OrderRawMessage> {
   const response = await fetch(
-    `http://localhost:3090/api/orders/${orderId}`,
+    `${API_URL}/orders/${orderId}`,
     {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -178,7 +180,7 @@ export async function getOrderDetail(
   orderId: number,
 ): Promise<OrderDetail> {
   const response = await fetch(
-    `http://localhost:3090/api/orders/${orderId}/detail`,
+    `${API_URL}/orders/${orderId}/detail`,
     {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -203,7 +205,7 @@ export async function claimOrder(
   orderId: number,
 ) {
   const response = await fetch(
-    `http://localhost:3090/api/orders/${orderId}/claim`,
+    `${API_URL}/orders/${orderId}/claim`,
     {
       method: "POST",
 
@@ -230,7 +232,7 @@ export async function getReassignTargets(
   orderId: number,
 ): Promise<ReassignTarget[]> {
   const response = await fetch(
-    `http://localhost:3090/api/orders/${orderId}/reassign-targets`,
+    `${API_URL}/orders/${orderId}/reassign-targets`,
     {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -256,7 +258,7 @@ export async function reassignOrder(
   reason: string,
 ) {
   const response = await fetch(
-    `http://localhost:3090/api/orders/${orderId}/reassign`,
+    `${API_URL}/orders/${orderId}/reassign`,
     {
       method: "POST",
       headers: {
@@ -285,7 +287,7 @@ export async function escalateOrder(
   reason: string,
 ) {
   const response = await fetch(
-    `http://localhost:3090/api/orders/${orderId}/escalate`,
+    `${API_URL}/orders/${orderId}/escalate`,
     {
       method: "POST",
       headers: {
@@ -317,7 +319,7 @@ export async function sendResult(
   files.forEach((file) => formData.append("files", file))
 
   const response = await fetch(
-    `http://localhost:3090/api/orders/${orderId}/results`,
+    `${API_URL}/orders/${orderId}/results`,
     {
       method: "POST",
       headers: {
@@ -348,7 +350,7 @@ export async function completeOrder(
   files.forEach((file) => formData.append("files", file))
 
   const response = await fetch(
-    `http://localhost:3090/api/orders/${orderId}/complete`,
+    `${API_URL}/orders/${orderId}/complete`,
     {
       method: "POST",
       headers: {

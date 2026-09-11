@@ -1,3 +1,5 @@
+import { API_URL } from "@/config/api"
+
 export type LoginPayload = {
   username: string
   password: string
@@ -22,7 +24,7 @@ export async function loginRequest(
   payload: LoginPayload,
 ): Promise<LoginResponse> {
   const response = await fetch(
-    "http://localhost:3090/api/auth/login",
+    `${API_URL}/auth/login`,
     {
       method: "POST",
       headers: {

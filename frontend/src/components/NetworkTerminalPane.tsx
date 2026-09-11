@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { io, type Socket } from "socket.io-client";
+import { API_BASE_URL, API_URL } from "@/config/api";
 import {
   Activity,
   ChevronDown,
@@ -233,7 +234,7 @@ export default function NetworkTerminalPane({ active, workspaceId, kind, navigat
     let deadline = 0;
     let retryTimer = 0;
     let expiryTimer = 0;
-    const socket = io("http://localhost:3090", { auth: { token } });
+    const socket = io(API_BASE_URL, { auth: { token } });
     socketRef.current = socket;
     const stopRecovery = (message: string) => {
       window.clearTimeout(retryTimer);
@@ -468,7 +469,7 @@ export default function NetworkTerminalPane({ active, workspaceId, kind, navigat
     if (!token || !pairCode.trim()) return;
     try {
       setPairError("");
-      const response = await fetch("http://localhost:3090/api/agents/pair", {
+      const response = await fetch(`${API_URL}/agents/pair`, {
         method: "POST",
         headers: {
           Authorization: "Bearer " + token,

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { API_URL } from "@/config/api";
 export type NetworkHealth = { agent: boolean | null; vpn: boolean | null; vpnHost: string };
 // One poller per Network Tools page, not one per terminal/tab.
 export function useNetworkHealth(token: string | null, active: boolean): NetworkHealth {
@@ -12,7 +13,7 @@ export function useNetworkHealth(token: string | null, active: boolean): Network
     let lastCheck = 0;
     const request = async (path: string) => {
       const response = await fetch(
-        "http://localhost:3090/api/network/" + path,
+        API_URL + "/network/" + path,
         { headers: { Authorization: "Bearer " + token } },
       );
       const body = await response.json();

@@ -6,7 +6,7 @@ const { testSshConnection } = require("../services/ssh.service");
 const { openTerminal, runTerminalCommand } = require("../services/ssh-terminal.service");
 const { loadAgentConfig, saveAgentConfig } = require("../config/agent-config");
 
-const serverUrl = (process.env.HD_WORK_SERVER_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
+const serverUrl = (process.env.HD_WORK_SERVER_URL || "http://127.0.0.1:3090").replace(/\/$/, "");
 const pairingCode = crypto.randomBytes(4).toString("hex").toUpperCase().match(/.{1,4}/g).join("-");
 
 function connectAgent() {
