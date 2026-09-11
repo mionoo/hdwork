@@ -9,6 +9,7 @@ const telegramService = require("./src/services/telegram.service");
 const realtimeService = require("./src/services/realtime.service");
 const agentRealtimeService = require("./src/services/agent-realtime.service");
 const terminalRealtimeService = require("./src/services/terminal-realtime.service");
+const { startCactiScheduler } = require("./src/services/cacti-scheduler.service");
 
 const PORT = Number(process.env.PORT) || 3090;
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:5173";
@@ -39,6 +40,7 @@ async function startServer() {
     server.listen(PORT, () => {
       console.log(`🚀 Server running on http://localhost:${PORT}`);
       telegramService.startPolling();
+      startCactiScheduler();
     });
   } catch (error) {
     console.error("❌ Database connection failed:");
