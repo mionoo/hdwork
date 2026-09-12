@@ -219,6 +219,67 @@ async function getAlarmDestination(customerType) {
   return rows[0] || null;
 }
 
+async function saveAlarmSubscriber({ customerType, userId, chatId, username, displayName }) {
+  if (!getAlarmCategory(customerType)) {
+    throw new Error("Jenis alarm tidak dikenal.");
+  }
+
+  await pool.query(
+    `
+    INSERT INTO telegram_alarm_subscribers (
+      customer_type, telegram_user_id, telegram_chat_id, telegram_username, display_name, is_active
+    )
+    VALUES (?, ?, ?, ?, ?, 1)
+    ON DUPLICATE KEY UPDATE
+      telegram_chat_id = VALUES(telegram_chat_id),
+      telegram_username = VALUES(telegram_username),
+      display_name = VALUES(display_name),
+      is_active = 1,
+      updated_at = CURRENT_TIMESTAMP
+    `,
+    [String(customerType).toLowerCase(), userId, chatId, username || null, displayName || null],
+  );
+}
+
+async function deactivateAlarmSubscriber(customerType, userId) {
+  await pool.query(
+    `
+    UPDATE telegram_alarm_subscribers
+    SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+    WHERE customer_type = ? AND telegram_user_id = ?
+    `,
+    [String(customerType).toLowerCase(), userId],
+  );
+}
+
+async function getAlarmSubscribers(customerType) {
+  const [rows] = await pool.query(
+    `
+    SELECT id, telegram_user_id, telegram_chat_id, telegram_username, display_name
+    FROM telegram_alarm_subscribers
+    WHERE customer_type = ? AND is_active = 1
+    ORDER BY id ASC
+    `,
+    [String(customerType).toLowerCase()],
+  );
+
+  return rows;
+}
+
+async function getAlarmSubscriptions(userId) {
+  const [rows] = await pool.query(
+    `
+    SELECT customer_type
+    FROM telegram_alarm_subscribers
+    WHERE telegram_user_id = ? AND is_active = 1
+    ORDER BY customer_type ASC
+    `,
+    [userId],
+  );
+
+  return rows;
+}
+
 module.exports = {
   getCities,
   getSegments,
@@ -229,4 +290,8 @@ module.exports = {
   getAlarmCategory,
   getAlarmDestination,
   saveAlarmGroup,
+  saveAlarmSubscriber,
+  deactivateAlarmSubscriber,
+  getAlarmSubscribers,
+  getAlarmSubscriptions,
 };

@@ -89,18 +89,34 @@ async function sendActiveAlarms() {
 
   for (const [customerType, devices] of devicesByCustomerType) {
     const destination = await telegramRepository.getAlarmDestination(customerType);
-    if (!destination) {
+    const subscribers = await telegramRepository.getAlarmSubscribers(customerType);
+    const batches = splitAlarmDevices(customerType, devices);
+
+    if (!destination && !subscribers.length) {
       console.warn(`Tujuan alarm Telegram Cacti belum terdaftar: ${customerType}`);
       continue;
     }
-    const batches = splitAlarmDevices(customerType, devices);
+
     for (const batch of batches) {
-      const delivery = await telegramService.sendMessage(
-        destination.telegram_chat_id,
-        formatAlarmMessage(customerType, batch),
-        destination.telegram_thread_id,
-      );
-      if (!delivery.delivered) console.error(`Alarm Cacti ${customerType} gagal dikirim: ${delivery.error}`);
+      const message = formatAlarmMessage(customerType, batch);
+      if (destination) {
+        const delivery = await telegramService.sendMessage(
+          destination.telegram_chat_id,
+          message,
+          destination.telegram_thread_id,
+        );
+        if (!delivery.delivered) console.error(`Alarm Cacti ${customerType} gagal dikirim: ${delivery.error}`);
+      }
+
+      for (const subscriber of subscribers) {
+        const delivery = await telegramService.sendPersonalAlarmMessage(subscriber.telegram_chat_id, message);
+        if (delivery.delivered) continue;
+
+        console.error(`Alarm personal Cacti ${customerType} ke ${subscriber.telegram_user_id} gagal dikirim: ${delivery.error}`);
+        if (delivery.error_code === 403) {
+          await telegramRepository.deactivateAlarmSubscriber(customerType, subscriber.telegram_user_id);
+        }
+      }
     }
   }
 }
