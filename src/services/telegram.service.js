@@ -3,10 +3,24 @@ const telegramRepository = require("../repositories/telegram.repository");
 const orderRepository = require("../repositories/order.repository");
 const realtimeService = require("../services/realtime.service");
 
+function positiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
 const bot = process.env.TELEGRAM_BOT_TOKEN
   ? new Telegraf(process.env.TELEGRAM_BOT_TOKEN)
   : null;
+const PERSONAL_ALARM_RATE_PER_SECOND = positiveInteger(process.env.TELEGRAM_PERSONAL_ALARM_RATE_PER_SECOND, 25);
+const PERSONAL_ALARM_RETRY_LIMIT = positiveInteger(process.env.TELEGRAM_PERSONAL_ALARM_RETRY_LIMIT, 3);
+const PERSONAL_ALARM_INTERVAL_MS = Math.ceil(1000 / PERSONAL_ALARM_RATE_PER_SECOND);
 let started = false;
+let personalAlarmQueue = Promise.resolve();
+let nextPersonalAlarmAt = 0;
+
+function wait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
 
 function isGroupChat(chat) {
   return chat?.type === "group" || chat?.type === "supergroup";
@@ -127,6 +141,12 @@ function helpMessage() {
     "STO : GBG",
     "VALIN ID : 121212",
     "KETERANGAN : konfik inet nok",
+    "",
+    "## ALARM PERSONAL ##",
+    "Kirim di chat pribadi bot:",
+    "/alarmdatin atau /alarmnodeb untuk mulai menerima alarm ONT down",
+    "/stopalarmdatin atau /stopalarmnodeb untuk berhenti",
+    "/alarmstatus untuk melihat alarm yang aktif",
   ].join("\n");
 }
 
@@ -195,6 +215,23 @@ async function handleSetGroup(ctx) {
 }
 
 async function handleAlarmRegistration(ctx, customerType) {
+  if (!isGroupChat(ctx.chat)) {
+    if (ctx.chat?.type !== "private") {
+      await ctx.reply("Perintah alarm hanya dapat digunakan di chat pribadi atau grup Telegram.");
+      return;
+    }
+
+    await telegramRepository.saveAlarmSubscriber({
+      customerType,
+      userId: ctx.from.id,
+      chatId: ctx.chat.id,
+      username: ctx.from.username,
+      displayName: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" "),
+    });
+    await ctx.reply(`✅ Alarm ONT down ${customerType.toUpperCase()} aktif untuk akun ini. Health collector tidak dikirim ke chat pribadi.`);
+    return;
+  }
+
   if (!(await ensureAdmin(ctx))) return;
 
   const category = telegramRepository.getAlarmCategory(customerType);
@@ -209,6 +246,31 @@ async function handleAlarmRegistration(ctx, customerType) {
     `✅ Grup alarm ${customerType.toUpperCase()} berhasil didaftarkan.`,
     threadOptions(ctx.message),
   );
+}
+
+async function handleAlarmUnsubscribe(ctx, customerType) {
+  if (ctx.chat?.type !== "private") {
+    await ctx.reply("Perintah ini hanya dapat digunakan di chat pribadi dengan bot.");
+    return;
+  }
+
+  await telegramRepository.deactivateAlarmSubscriber(customerType, ctx.from.id);
+  await ctx.reply(`✅ Alarm ${customerType.toUpperCase()} dinonaktifkan untuk akun ini.`);
+}
+
+async function handleAlarmStatus(ctx) {
+  if (ctx.chat?.type !== "private") {
+    await ctx.reply("Perintah ini hanya dapat digunakan di chat pribadi dengan bot.");
+    return;
+  }
+
+  const subscriptions = await telegramRepository.getAlarmSubscriptions(ctx.from.id);
+  if (!subscriptions.length) {
+    await ctx.reply("Belum ada alarm personal yang aktif. Gunakan /alarmdatin atau /alarmnodeb.");
+    return;
+  }
+
+  await ctx.reply(`🔔 Alarm personal aktif: ${subscriptions.map((item) => item.customer_type.toUpperCase()).join(", ")}.`);
 }
 
 async function ensureCallbackAdmin(ctx) {
@@ -244,6 +306,9 @@ function registerHandlers() {
   bot.command("help", async (ctx) => { try { await ctx.reply(helpMessage(), threadOptions(ctx.message)); } catch (error) { console.error("/help gagal:", error.message); } });
   bot.command("alarmnodeb", async (ctx) => { try { await handleAlarmRegistration(ctx, "nodeb"); } catch (error) { console.error("/alarmnodeb gagal:", error.message); await ctx.reply(`⚠️ ${error.message}`, threadOptions(ctx.message)); } });
   bot.command("alarmdatin", async (ctx) => { try { await handleAlarmRegistration(ctx, "datin"); } catch (error) { console.error("/alarmdatin gagal:", error.message); await ctx.reply(`⚠️ ${error.message}`, threadOptions(ctx.message)); } });
+  bot.command("stopalarmnodeb", async (ctx) => { try { await handleAlarmUnsubscribe(ctx, "nodeb"); } catch (error) { console.error("/stopalarmnodeb gagal:", error.message); await ctx.reply(`⚠️ ${error.message}`); } });
+  bot.command("stopalarmdatin", async (ctx) => { try { await handleAlarmUnsubscribe(ctx, "datin"); } catch (error) { console.error("/stopalarmdatin gagal:", error.message); await ctx.reply(`⚠️ ${error.message}`); } });
+  bot.command("alarmstatus", async (ctx) => { try { await handleAlarmStatus(ctx); } catch (error) { console.error("/alarmstatus gagal:", error.message); await ctx.reply(`⚠️ ${error.message}`); } });
   bot.command("config", async (ctx) => { try { await ingestConfigOrder(ctx); } catch (error) { console.error("Order config Telegram gagal diproses:", error.message); } });
   bot.on("text", async (ctx) => { try { await ingestIncomingOrder(ctx); } catch (error) { console.error("Order Telegram gagal diproses:", error.message); } });
   bot.action(/^setgroup:city:(\d+)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; const segments = await telegramRepository.getSegments(); await ctx.editMessageText("Konfigurasi grup order\n\n2/3 — Pilih segmen:", segmentKeyboard(ctx.match[1], segments)); await ctx.answerCbQuery(); });
@@ -358,8 +423,47 @@ async function sendMessage(chatId, text, threadId = 0) {
     return { delivered: true, message_id: message.message_id, error: null };
   } catch (error) {
     console.error("Pengiriman alarm Cacti ke Telegram gagal:", error.message);
-    return { delivered: false, error: error.message };
+    return {
+      delivered: false,
+      error: error.message,
+      error_code: error.response?.error_code || null,
+      retry_after: error.response?.parameters?.retry_after || null,
+    };
   }
+}
+
+async function sendPersonalAlarmMessage(chatId, text) {
+  const run = async () => {
+    let lastDelivery = null;
+
+    for (let attempt = 0; attempt <= PERSONAL_ALARM_RETRY_LIMIT; attempt += 1) {
+      const delay = Math.max(0, nextPersonalAlarmAt - Date.now());
+      if (delay) await wait(delay);
+      nextPersonalAlarmAt = Date.now() + PERSONAL_ALARM_INTERVAL_MS;
+
+      const delivery = await sendMessage(chatId, text);
+      if (delivery.delivered || delivery.error_code === 403 || delivery.error_code === 400) {
+        return delivery;
+      }
+
+      lastDelivery = delivery;
+      if (delivery.error_code === 429) {
+        const retryAfterMs = Math.max(1, Number(delivery.retry_after) || 1) * 1000;
+        nextPersonalAlarmAt = Math.max(nextPersonalAlarmAt, Date.now() + retryAfterMs);
+        continue;
+      }
+
+      if (attempt < PERSONAL_ALARM_RETRY_LIMIT) {
+        const backoffMs = 1000 * (attempt + 1);
+        nextPersonalAlarmAt = Math.max(nextPersonalAlarmAt, Date.now() + backoffMs);
+      }
+    }
+
+    return lastDelivery || { delivered: false, error: "Pengiriman alarm personal gagal" };
+  };
+
+  personalAlarmQueue = personalAlarmQueue.catch(() => undefined).then(run);
+  return personalAlarmQueue;
 }
 
 async function startPolling() {
@@ -371,4 +475,11 @@ async function startPolling() {
 }
 
 
-module.exports = { startPolling, notifyOrderClaim, notifyOrderResult, notifyOrderCompleted, sendMessage };
+module.exports = {
+  startPolling,
+  notifyOrderClaim,
+  notifyOrderResult,
+  notifyOrderCompleted,
+  sendMessage,
+  sendPersonalAlarmMessage,
+};

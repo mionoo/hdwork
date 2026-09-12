@@ -57,7 +57,7 @@ function connectAgent() {
   });
 
   socket.on("network:ping", async ({ host }, acknowledge) => {
-    console.log(`Ping command received for ${host}`);
+    //console.log(`Ping command received for ${host}`);
     try {
       const result = await pingHost(host);
       if (typeof acknowledge === "function") acknowledge(result);
