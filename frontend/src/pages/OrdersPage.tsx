@@ -416,10 +416,15 @@ export default function OrdersPage() {
 
                 <tbody>
 
-                  {visibleOrders.map((order) => (
+                  {visibleOrders.map((order) => {
+                    const isMyOrder = user?.role === "HD"
+                      && order.performance_owner_id != null
+                      && Number(order.performance_owner_id) === Number(user.id)
+
+                    return (
                     <tr
                       key={order.id}
-                      className="border-b"
+                      className={isMyOrder ? "border-b bg-primary/10" : "border-b"}
                     >
 
                       <td className="p-3">
@@ -452,8 +457,16 @@ export default function OrdersPage() {
                       </td>
 
                       <td className="p-3">
-                        {order.performance_owner_name ||
-                          "-"}
+                        <div className="flex flex-col gap-1">
+                          <span className={isMyOrder ? "font-semibold" : undefined}>
+                            {order.performance_owner_name || "-"}
+                          </span>
+                          {isMyOrder && (
+                            <span className="whitespace-nowrap text-xs font-medium text-primary">
+                              Anda menangani
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       <td className="p-3">
@@ -493,7 +506,8 @@ export default function OrdersPage() {
                       </td>
 
                     </tr>
-                  ))}
+                    )
+                  })}
 
                 </tbody>
               </table>
