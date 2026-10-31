@@ -13,12 +13,13 @@ import uuid
 from urllib.parse import urljoin
 
 from dotenv import load_dotenv
-from batch_apply import validate_source
+from source_validation import validate_source
 from compare_devices import compare, fetch_inventory, has_datin_identity, parse_tree_memberships
 from device_plan import build_device_plan
 from pilot_apply import attach_payload, create_payload, verify_host
 from pilot_preview import creation_profile
 from sync_headers import Cacti, HDWork, SERVERS, checked_html, normalize, single_instance
+from agent_support import fsync_directory
 
 FIELDS = ('sid', 'server', 'tree_id', 'institution', 'header_id', 'description', 'desired', 'creation_profile')
 BASE = Path(__file__).resolve().parent
@@ -38,11 +39,7 @@ def durable(path, data):
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        fsync_directory(path.parent)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -253,13 +250,13 @@ def main():
     parser.add_argument('--delay', type=float, default=2, help='Jeda POST Cacti, minimum 2 detik')
     parser.add_argument('--report', default=str(BASE / 'bulk-plan.report.json'))
     parser.add_argument('--journal', default=str(BASE / 'bulk-execution.report.json'))
-    parser.add_argument('--env-file', default=str(BASE / '.env'))
+    parser.add_argument('--env-file', default=str(BASE.parent / '.env'))
     args = parser.parse_args()
     if not 2 <= args.delay <= 60 or (args.limit is not None and not 1 <= args.limit <= 1000):
         parser.error('Delay wajib 2–60 detik; limit wajib 1–1000.')
     if (args.apply or args.resume) and args.limit is not None:
         parser.error('--limit hanya untuk membuat plan; eksekusi selalu memakai seluruh plan tetap.')
-    load_dotenv(args.env_file)
+    load_dotenv(args.env_file, interpolate=False, encoding="utf-8-sig")
     api, clients = None, {}
     try:
         with single_instance():
@@ -280,11 +277,11 @@ def main():
                 print(f'Pratinjau: {args.report}. Tidak ada penulisan ke Cacti/database.')
                 return 0
             if args.resume:
-                state = json.loads(journal.read_text())
+                state = json.loads(journal.read_text(encoding="utf-8-sig"))
             else:
                 if journal.exists():
                     raise RuntimeError('Jurnal sudah ada; gunakan --resume, jangan hapus progres.')
-                plan = json.loads(Path(args.report).read_text())
+                plan = json.loads(Path(args.report).read_text(encoding="utf-8-sig"))
                 current = preflight(api, clients, plan)
                 state = {'plan': plan, 'batch_id': 'bulk-' + str(uuid.uuid4()), 'token': secrets.token_hex(32),
                          'snapshot_at': current['snapshot_at'], 'phase': 'RESERVED', 'headers': {}, 'devices': {}}

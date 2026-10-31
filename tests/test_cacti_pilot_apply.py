@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -9,7 +10,7 @@ from unittest.mock import Mock, patch
 
 from bs4 import BeautifulSoup
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'integrations/cacti-agent'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'cacti_agent/sync'))
 import pilot_apply as apply
 from test_cacti_pilot import form, plan
 from pilot_preview import creation_profile
@@ -43,7 +44,8 @@ class PilotApplyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'job.report.json'
             apply.save_journal(path, {'phase': 'RESERVED'}, exclusive=True)
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            if os.name != 'nt':
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             with self.assertRaises(FileExistsError):
                 apply.save_journal(path, {}, exclusive=True)
 

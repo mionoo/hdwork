@@ -1,6 +1,6 @@
 # Uji hapus manual satu host DATIN
 
-`integrations/cacti-agent/delete_device.py` hanya untuk SID `1165651712`,
+`cacti_agent/sync/delete_device.py` hanya untuk SID `1165651712`,
 host integrasi SBS `8471`, DATIN tree `34`, header BANK JATIM `9127`.
 Tidak menghapus OLT/ONT fisik, header, host lain, atau ATCS. Ini bukan
 sinkronisasi hapus otomatis dan tidak melakukan pembersihan database HD Work.
@@ -50,8 +50,8 @@ belum termasuk pilot ini. Tidak ada migrasi atau perubahan Apps Script di sini.
 ## Perintah untuk uji yang telah disetujui
 
 ```bash
-python3 integrations/cacti-agent/delete_device.py --plan --confirm-not
-python3 integrations/cacti-agent/delete_device.py --apply --confirm-not
+python3 cacti_agent/sync/delete_device.py --plan --confirm-not
+python3 cacti_agent/sync/delete_device.py --apply --confirm-not
 ```
 
 Default journal `delete-1165651712-execution.report.json` dan pratinjau
@@ -61,7 +61,7 @@ konfirmasi final. `--apply` dapat melanjutkan jurnal CONFIRMATION_PREPARED
 yang identik, tetapi tidak mengulang konfirmasi yang pernah dicoba.
 
 ```bash
-python3 integrations/cacti-agent/delete_device.py --resume --confirm-not
+python3 cacti_agent/sync/delete_device.py --resume --confirm-not
 ```
 
 Resume hanya memverifikasi ketiadaan host dan audit. Tidak mengirim POST delete.

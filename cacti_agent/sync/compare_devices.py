@@ -289,12 +289,12 @@ def write_reports(prefix, report):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--env-file", default=str(Path(__file__).with_name(".env")))
+    parser.add_argument("--env-file", default=str(Path(__file__).resolve().parents[1] / ".env"))
     parser.add_argument("--report-prefix", default=str(Path(__file__).with_name("comparison.report")))
     parser.add_argument("--protected-header", action="append", default=["ATCS"])
     parser.add_argument("--plan", action="store_true", help="Pratinjau tindakan dengan mapping database dan header live; tidak menulis ke Cacti")
     args = parser.parse_args()
-    load_dotenv(args.env_file)
+    load_dotenv(args.env_file, interpolate=False, encoding="utf-8-sig")
     clients = []
     hdwork = None
     try:

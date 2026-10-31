@@ -2,7 +2,7 @@ from pathlib import Path
 import sys
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'integrations/cacti-agent'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'cacti_agent/sync'))
 from pilot_preview import creation_profile, select_pilot
 
 

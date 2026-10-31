@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'integrations/cacti-agent'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'cacti_agent/sync'))
 import edit_device as edit
 from compare_devices import parse_device_detail
 

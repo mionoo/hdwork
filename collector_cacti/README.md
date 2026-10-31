@@ -1,14 +1,15 @@
 # Collector Cacti
 
-Jalankan collector sebagai proses yang tetap aktif. Ia melakukan satu siklus saat dimulai, lalu mengulang setiap lima menit secara default.
+Source collector sekarang ada di `cacti_agent/collector`, dengan satu `.env` dan
+launcher bersama sync. Ikuti [panduan migrasi](../cacti_agent/README.md). Konfigurasi
+lokal lama di folder ini tetap sebagai cadangan; jangan jalankan dua collector.
 
-1. Salin `.env.example` menjadi `.env`, lalu isi alamat Cacti, kredensial, API key, dan `CACTI_HEALTH_PING_HOST`.
-2. Instal dependensi dari `requirements.txt`.
-3. Jalankan `python3 cactydown.py` melalui service manager pada PC collector agar proses otomatis hidup kembali setelah PC restart.
+Hentikan collector/sync lama, lalu dari root repository:
 
-Konfigurasi interval:
+```bash
+python3 cacti_agent/launcher.py --migrate-local
+python3 cacti_agent/launcher.py --check
+python3 cacti_agent/launcher.py
+```
 
-- `COLLECTOR_INTERVAL_SECONDS=300`: kirim data ke backend setiap 5 menit.
-- `CACTI_HEALTH_PING_HOST`: IP Cacti yang diuji melalui jalur VPN/intranet pada setiap siklus.
-
-Backend mengevaluasi health setiap 10 menit. Jika tidak menerima data lebih dari 15 menit, ping Cacti gagal, atau scan Cacti gagal, backend mengirim alarm ke grup Telegram NODEB atau DATIN terkait. Ketika pulih, backend mengirim satu pesan pemulihan.
+Interval dan pengiriman alarm/health collector tetap sama seperti sebelumnya.

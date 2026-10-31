@@ -36,10 +36,10 @@ pratinjau baru dan minta persetujuan ulang bila target/config berubah.
 
 ```bash
 # Default hanya preflight, tidak menulis reservasi ataupun Cacti.
-/usr/local/bin/python3 integrations/cacti-agent/pilot_apply.py
+/usr/local/bin/python3 cacti_agent/sync/pilot_apply.py
 
 # Hanya setelah backend siap, preflight lolos, dan dua target/config disetujui.
-/usr/local/bin/python3 integrations/cacti-agent/pilot_apply.py --apply
+/usr/local/bin/python3 cacti_agent/sync/pilot_apply.py --apply
 ```
 
 Untuk setiap server: reservasi → simpan journal privat → create satu kali →

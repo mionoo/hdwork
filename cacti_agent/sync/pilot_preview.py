@@ -72,12 +72,12 @@ def select_pilot(rows, server, sid=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--env-file', default=str(Path(__file__).with_name('.env')))
+    parser.add_argument('--env-file', default=str(Path(__file__).resolve().parents[1] / '.env'))
     parser.add_argument('--sbs-sid')
     parser.add_argument('--sbu-sid')
     parser.add_argument('--report', default=str(Path(__file__).with_name('pilot.report.json')))
     args = parser.parse_args()
-    load_dotenv(args.env_file)
+    load_dotenv(args.env_file, interpolate=False, encoding="utf-8-sig")
     clients = []
     api = None
     try:

@@ -9,7 +9,7 @@ import unittest
 from bs4 import BeautifulSoup
 
 
-source = Path(__file__).resolve().parents[1] / "collector_cacti/cactydown.py"
+source = Path(__file__).resolve().parents[1] / "cacti_agent/collector/cactydown.py"
 tree = ast.parse(source.read_text())
 parser = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "parse_down_devices")
 namespace = {"BeautifulSoup": BeautifulSoup, "re": re}

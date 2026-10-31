@@ -1,6 +1,6 @@
 # Pratinjau pencocokan spreadsheet dan device Cacti
 
-`integrations/cacti-agent/compare_devices.py` hanya membaca. Tidak ada opsi apply, perubahan kepemilikan, atau aksi tambah/edit/hapus device/header. Report CSV menampilkan data sumber dan Cacti berdampingan; JSON memuat rincian kandidat, device tidak terpetakan dan ringkasan.
+`cacti_agent/sync/compare_devices.py` hanya membaca. Tidak ada opsi apply, perubahan kepemilikan, atau aksi tambah/edit/hapus device/header. Report CSV menampilkan data sumber dan Cacti berdampingan; JSON memuat rincian kandidat, device tidak terpetakan dan ringkasan.
 
 ## Persiapan
 
@@ -10,14 +10,14 @@
 - Jalankan pada komputer yang terhubung VPN. Dependency sama dengan `sync_headers.py`.
 
 ```bash
-cd /path/ke/hdwork/integrations/cacti-agent
-.venv/bin/python compare_devices.py
+cd /path/ke/hdwork/cacti_agent/sync
+../.venv/bin/python compare_devices.py
 ```
 
 Output: `comparison.report.json` dan `comparison.report.csv`. Untuk jalur lain:
 
 ```bash
-.venv/bin/python compare_devices.py --report-prefix /path/laporan/datin.report
+../.venv/bin/python compare_devices.py --report-prefix /path/laporan/datin.report
 ```
 
 Untuk pratinjau tindakan dengan mapping database, lihat

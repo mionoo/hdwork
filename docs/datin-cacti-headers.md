@@ -1,6 +1,10 @@
 # Agent otomatis header instansi DATIN
 
-Script `integrations/cacti-agent/sync_headers.py` mengambil daftar instansi dari master spreadsheet HD Work, login ke SBS/SBU, membaca header yang ada, dan pada mode `--apply` membuat header yang belum tersedia. Agent tidak menambah/mengubah/menghapus host atau menghapus/mengganti nama header lama.
+Panduan alat header mandiri/historis. Untuk operasi rutin gunakan
+[launcher bersama](../cacti_agent/README.md); jangan jalankan cron header bersamaan
+dengan sync otomatis (backend menolak writer lama ketika flag otomatisasi aktif).
+
+Script `cacti_agent/sync/sync_headers.py` mengambil daftar instansi dari master spreadsheet HD Work, login ke SBS/SBU, membaca header yang ada, dan pada mode `--apply` membuat header yang belum tersedia. Agent tidak menambah/mengubah/menghapus host atau menghapus/mengganti nama header lama.
 
 ## Backend
 
@@ -24,7 +28,7 @@ Endpoint khusus agent memakai header `X-Cacti-Agent-Key`, terpisah dari key Apps
 Gunakan satu komputer Linux/macOS yang terhubung VPN dan dapat menjangkau kedua alamat Cacti. Boleh komputer collector yang sama. Tidak perlu Google Drive/service account/Chrome/Selenium.
 
 ```bash
-cd /path/ke/hdwork/integrations/cacti-agent
+cd /path/ke/hdwork/cacti_agent
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 cp .env.example .env
@@ -35,7 +39,7 @@ Isi `.env` dengan key agent yang sama seperti backend dan kredensial Cacti SBS/S
 Jalankan pratinjau:
 
 ```bash
-.venv/bin/python sync_headers.py --report preview.report.json
+.venv/bin/python sync/sync_headers.py --report sync/preview.report.json
 ```
 
 Hasil `existing` berarti header sudah ada; `would_create` berarti belum ada dan belum dibuat. Periksa daftar namanya sebelum mode apply pertama.
@@ -43,14 +47,14 @@ Hasil `existing` berarti header sudah ada; `would_create` berarti belum ada dan 
 Untuk menerapkan, dapat dimulai satu server:
 
 ```bash
-.venv/bin/python sync_headers.py --apply --server SBS --report sbs.report.json
-.venv/bin/python sync_headers.py --apply --server SBU --report sbu.report.json
+.venv/bin/python sync/sync_headers.py --apply --server SBS --report sync/sbs.report.json
+.venv/bin/python sync/sync_headers.py --apply --server SBU --report sync/sbu.report.json
 ```
 
 Atau sekaligus kedua server:
 
 ```bash
-.venv/bin/python sync_headers.py --apply --report last.report.json
+.venv/bin/python sync/sync_headers.py --apply --report sync/last.report.json
 ```
 
 Agent membaca ulang halaman sesudah Create dan mengambil ID header sebenarnya. Retry POST Create tidak dilakukan otomatis saat timeout. Jalankan ulang agent; ia mencari header yang sudah terbentuk sebelum membuat baru. Mapping yang gagal dikirim ke HD Work dapat disimpan lagi lewat run berikutnya.
@@ -60,7 +64,7 @@ Agent membaca ulang halaman sesudah Create dan mengambil ID header sebenarnya. R
 Setelah pratinjau dan apply pertama terverifikasi, pasang cron hanya pada satu komputer agent. Contoh jalur deployment CT (sesuaikan jika collector di komputer lain):
 
 ```cron
-5,15,25,35,45,55 * * * * /root/HD/hdwork/integrations/cacti-agent/.venv/bin/python /root/HD/hdwork/integrations/cacti-agent/sync_headers.py --apply --report /root/HD/hdwork/integrations/cacti-agent/last.report.json >> /root/HD/hdwork/integrations/cacti-agent/agent.log 2>&1
+5,15,25,35,45,55 * * * * /root/HD/hdwork/cacti_agent/.venv/bin/python /root/HD/hdwork/cacti_agent/sync/sync_headers.py --apply --report /root/HD/hdwork/cacti_agent/sync/last.report.json >> /root/HD/hdwork/cacti_agent/sync/agent.log 2>&1
 ```
 
 Agent berjalan sekali lalu keluar. Lock lokal mencegah dua proses di komputer sama. Jangan menjadwalkan apply dari beberapa komputer secara bersamaan karena Cacti tidak menjamin nama header unik. Apps Script dan cron memiliki jadwal independen; agent memakai snapshot terakhir yang sudah sukses.

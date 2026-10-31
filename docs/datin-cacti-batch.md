@@ -1,7 +1,7 @@
 # Pratinjau batch 10 device dan header baru
 
 ```bash
-/usr/local/bin/python3 integrations/cacti-agent/batch_preview.py
+/usr/local/bin/python3 cacti_agent/sync/batch_preview.py
 ```
 
 Ini hanya membaca HD Work dan Cacti. Output lokal `batch-10.report.json` berisi
@@ -71,10 +71,10 @@ repo agar konfigurasi hash sama dengan backend.
 
 ```bash
 # Default hanya membaca; tidak membuat reservasi.
-/usr/local/bin/python3 integrations/cacti-agent/batch_apply.py
+/usr/local/bin/python3 cacti_agent/sync/batch_apply.py
 
 # Setelah backend siap, persetujuan 10 target sudah ada dan preflight lolos.
-/usr/local/bin/python3 integrations/cacti-agent/batch_apply.py --apply
+/usr/local/bin/python3 cacti_agent/sync/batch_apply.py --apply
 ```
 
 Alur: cek sumber/header/inventaris/form → reservasi atomik satu batch, 4 header,

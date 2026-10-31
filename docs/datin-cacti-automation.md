@@ -89,12 +89,13 @@ NOT/konflik ikut sebagai metadata, bukan pelanggan aktif.
 
 ### 3. Pratinjau dari komputer VPN
 
-Pakai `.env` agent lama. Komputer harus menyala, tidak sleep, dan VPN menjangkau
+Gunakan satu `cacti_agent/.env`. Untuk beralih dari folder lama, hentikan worker
+lama dan ikuti [migrasi lokal](../cacti_agent/README.md) dahulu. Komputer harus menyala, tidak sleep, dan VPN menjangkau
 SBS/SBU. Jangan pindah agent ke container backend kecuali punya akses VPN juga.
 
 ```bash
 cd /Users/fajarkhojek/hd_work
-/usr/local/bin/python3 integrations/cacti-agent/reconcile.py --plan
+/usr/local/bin/python3 cacti_agent/sync/reconcile.py --plan
 ```
 
 Periksa `reconcile-plan.report.json`. Laporan ini observasi; eksekusi selalu memakai
@@ -117,28 +118,23 @@ sendiri tidak memiliki kunci global terhadap operator manual.
 Di komputer VPN:
 
 ```bash
-/usr/local/bin/python3 integrations/cacti-agent/reconcile.py --apply
+/usr/local/bin/python3 cacti_agent/sync/reconcile.py --apply
 ```
 
 Periksa log/database. Run selesai diarsipkan sebagai `reconcile-UUID.report.json`.
 
-### 5. Jalankan berkala setelah satu siklus berhasil
+### 5. Jalankan sync dan collector lewat satu launcher
 
 ```bash
-/usr/local/bin/python3 integrations/cacti-agent/reconcile.py --watch --apply --interval 600
+/usr/local/bin/python3 cacti_agent/launcher.py --check
+/usr/local/bin/python3 cacti_agent/launcher.py
 ```
 
-Atau jika PM2 tersedia pada komputer VPN:
-
-```bash
-pm2 start integrations/cacti-agent/ecosystem.config.cjs
-pm2 logs datin-cacti-sync --lines 60
-pm2 save
-```
-
-Config memakai `/usr/local/bin/python3`; sesuaikan lewat `PYTHON_BIN` bila perlu.
-Collector tetap proses tersendiri. Jangan membuat dua proses sync. PM2 online
-saja bukan bukti berhasil: periksa log dan run DONE.
+Tidak perlu PM2 pada PC agent. Launcher memulai dua worker terpisah dengan log
+`[SYNC]`/`[COLLECTOR]` dan restart worker yang keluar. Konfigurasi/jurnal lama
+dimigrasikan sekali dengan `python3 cacti_agent/launcher.py --migrate-local`.
+Jangan membuat dua proses sync/collector; hentikan seluruh proses lama dahulu.
+Periksa hasil VERIFIED dan run DONE, bukan sekadar proses masih berjalan.
 
 ## Pemulihan dan audit
 
@@ -159,7 +155,8 @@ log agent diabaikan Git. Pindah mesin harus menghentikan proses lama dahulu dan
 memindahkan jurnal secara privat, bukan menjalankan dua salinan. Jangan mengarsipkan
 semua `.report.json` dengan glob ketika ada run aktif.
 
-Hentikan melalui `pm2 stop datin-cacti-sync` atau Ctrl+C. Flag backend `0` menjadi
+Hentikan launcher melalui Ctrl+C. Jika masih memakai PM2 lama, hentikan juga
+`pm2 stop datin-cacti-sync` sebelum beralih. Flag backend `0` menjadi
 pengaman tambahan; rekonsiliasi job yang pernah mencoba write dahulu sebelum
 kembali memakai writer manual.
 

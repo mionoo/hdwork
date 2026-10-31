@@ -3,7 +3,7 @@ from pathlib import Path
 import sys
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "integrations/cacti-agent"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "cacti_agent/sync"))
 from device_plan import build_device_plan
 from sync_headers import SERVERS
 

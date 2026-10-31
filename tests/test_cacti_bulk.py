@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'integrations/cacti-agent'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'cacti_agent/sync'))
 import bulk_sync as bulk
 from test_cacti_pilot import form, plan
 from pilot_preview import creation_profile
@@ -34,7 +34,8 @@ class BulkTests(unittest.TestCase):
             bulk.durable(p, {'token': 'secret', 'phase': 'RESERVED'})
             bulk.durable(p, {'token': 'secret', 'phase': 'CREATE_ATTEMPTED'})
             self.assertEqual(json.loads(p.read_text())['phase'], 'CREATE_ATTEMPTED')
-            self.assertEqual(os.stat(p).st_mode & 0o777, 0o600)
+            if os.name != 'nt':
+                self.assertEqual(os.stat(p).st_mode & 0o777, 0o600)
             self.assertEqual(list(Path(d).iterdir()), [p])
             r = row()
             p = {'version': 1, 'manifest': [r], 'manifest_sha256': bulk.digest([r])}

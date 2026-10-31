@@ -8,7 +8,7 @@ import contextlib
 import io
 import json
 
-AGENT_DIR = Path(__file__).resolve().parents[1] / "integrations/cacti-agent"
+AGENT_DIR = Path(__file__).resolve().parents[1] / "cacti_agent/sync"
 sys.path.insert(0, str(AGENT_DIR))
 spec = importlib.util.spec_from_file_location("comparison", AGENT_DIR / "compare_devices.py")
 comparison = importlib.util.module_from_spec(spec)

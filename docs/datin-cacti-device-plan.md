@@ -23,7 +23,7 @@ Jangan isi mapping lewat SQL hanya untuk melewati HOLD.
 ## Jalankan pratinjau dari komputer ber-VPN
 
 ```bash
-/usr/local/bin/python3 integrations/cacti-agent/compare_devices.py --plan
+/usr/local/bin/python3 cacti_agent/sync/compare_devices.py --plan
 ```
 
 Menggunakan konfigurasi `.env` agent yang sudah ada. Tanpa `--plan`, compare lama
@@ -65,7 +65,7 @@ bukan antrean eksekusi yang boleh dipakai ulang tanpa inventaris baru.
 Siapkan dua target uji beserta profil form live, tanpa menulis ke Cacti:
 
 ```bash
-/usr/local/bin/python3 integrations/cacti-agent/pilot_preview.py
+/usr/local/bin/python3 cacti_agent/sync/pilot_preview.py
 ```
 
 Script memilih satu calon CREATE per server yang headernya sudah ada, memprioritaskan

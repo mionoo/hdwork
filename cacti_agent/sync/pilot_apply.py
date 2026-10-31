@@ -127,10 +127,10 @@ def execute_reserved_device(client, row, journal, job, api):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--preview', default=str(Path(__file__).with_name('pilot.report.json')))
-    parser.add_argument('--env-file', default=str(Path(__file__).with_name('.env')))
+    parser.add_argument('--env-file', default=str(Path(__file__).resolve().parents[1] / '.env'))
     parser.add_argument('--apply', action='store_true')
     args = parser.parse_args()
-    load_dotenv(args.env_file)
+    load_dotenv(args.env_file, interpolate=False, encoding="utf-8-sig")
     api, clients = None, []
     try:
         preview = json.loads(Path(args.preview).read_text(encoding='utf-8'))

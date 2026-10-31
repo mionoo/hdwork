@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import requests
 
-spec = importlib.util.spec_from_file_location("headers_agent", Path(__file__).resolve().parents[1] / "integrations/cacti-agent/sync_headers.py")
+spec = importlib.util.spec_from_file_location("headers_agent", Path(__file__).resolve().parents[1] / "cacti_agent/sync/sync_headers.py")
 agent = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(agent)
 

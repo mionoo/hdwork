@@ -167,9 +167,9 @@ def main():
     group.add_argument('--resume', action='store_true')
     parser.add_argument('--report', default=str(DEFAULT_PLAN))
     parser.add_argument('--journal', default=str(DEFAULT_JOURNAL))
-    parser.add_argument('--env-file', default=str(BASE / '.env'))
+    parser.add_argument('--env-file', default=str(BASE.parent / '.env'))
     args = parser.parse_args()
-    load_dotenv(args.env_file)
+    load_dotenv(args.env_file, interpolate=False, encoding="utf-8-sig")
     api, client = None, None
     try:
         with single_instance():
@@ -179,13 +179,13 @@ def main():
             client.login()
             journal = Path(args.journal)
             if args.resume:
-                state = json.loads(journal.read_text())
+                state = json.loads(journal.read_text(encoding="utf-8-sig"))
                 verify_desired(state['plan'], source, desired)
                 execute(client, state['plan'], journal, state)
             elif args.apply:
                 if journal.exists():
                     raise RuntimeError('Jurnal sudah ada; gunakan --resume, jangan ulang edit.')
-                plan = json.loads(Path(args.report).read_text())
+                plan = json.loads(Path(args.report).read_text(encoding="utf-8-sig"))
                 verify_desired(plan, source, desired)
                 # Recheck source/mapping immediately before entering the edit pipeline.
                 current, current_desired = load_source(api)

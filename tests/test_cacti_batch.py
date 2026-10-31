@@ -8,7 +8,7 @@ import unittest
 import tempfile
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'integrations/cacti-agent'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'cacti_agent/sync'))
 from batch_preview import header_dependencies, select_batch
 import batch_preview as batch
 from test_cacti_pilot import form

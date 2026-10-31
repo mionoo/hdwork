@@ -1,7 +1,9 @@
 import os
 import re
+import sys
 import time
 import requests
+from pathlib import Path
 
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
@@ -11,7 +13,11 @@ from dotenv import load_dotenv
 # LOAD ENV
 # =========================================================
 
-load_dotenv()
+AGENT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(AGENT_ROOT))
+from agent_support import exclusive_lock, install_worker_signals
+
+load_dotenv(AGENT_ROOT / '.env', interpolate=False, encoding='utf-8-sig')
 
 
 # =========================================================
@@ -25,7 +31,7 @@ NAMA_PC = os.getenv(
 
 HDWORK_URL = os.getenv(
     "HDWORK_URL",
-    "http://localhost:3000/api/cactys/cacti"
+    os.getenv('HDWORK_BASE_URL', 'https://serverhdwork.telkomakses-area3.id').rstrip('/') + '/api/cactys/cacti'
 )
 
 HDWORK_API_KEY = os.getenv("HDWORK_API_KEY")
@@ -50,14 +56,14 @@ CACTI_CONFIG = {
 
     "datin": {
         "sbs": {
-            "base_url": os.getenv("DATIN_SBS_BASE_URL"),
-            "username": os.getenv("DATIN_SBS_USERNAME"),
-            "password": os.getenv("DATIN_SBS_PASSWORD"),
+            "base_url": os.getenv("DATIN_SBS_BASE_URL") or os.getenv("CACTI_SBS_BASE_URL", "http://10.96.33.156/ont"),
+            "username": os.getenv("DATIN_SBS_USERNAME") or os.getenv("CACTI_SBS_USERNAME"),
+            "password": os.getenv("DATIN_SBS_PASSWORD") or os.getenv("CACTI_SBS_PASSWORD"),
         },
         "sbu": {
-            "base_url": os.getenv("DATIN_SBU_BASE_URL"),
-            "username": os.getenv("DATIN_SBU_USERNAME"),
-            "password": os.getenv("DATIN_SBU_PASSWORD"),
+            "base_url": os.getenv("DATIN_SBU_BASE_URL") or os.getenv("CACTI_SBU_BASE_URL", "http://10.100.2.234/ont"),
+            "username": os.getenv("DATIN_SBU_USERNAME") or os.getenv("CACTI_SBU_USERNAME"),
+            "password": os.getenv("DATIN_SBU_PASSWORD") or os.getenv("CACTI_SBU_PASSWORD"),
         },
     },
 }
@@ -571,15 +577,22 @@ def run_forever():
         )
         time.sleep(wait_seconds)
 
-if __name__ == "__main__":
-
+def main():
+    install_worker_signals()
     try:
-        validate_config()
-        run_forever()
-
+        with exclusive_lock(AGENT_ROOT / '.collector.lock'):
+            validate_config()
+            run_forever()
+    except KeyboardInterrupt:
+        print('Collector dihentikan.')
+        return 0
     except Exception as e:
-
         print()
         print(
             f"❌ FATAL ERROR: {e}"
         )
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

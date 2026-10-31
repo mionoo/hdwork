@@ -16,6 +16,8 @@ import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from agent_support import require_migrated, sync_locks
 
 SERVERS = {
     "SBS": {"base_url": "http://10.96.33.156/ont", "tree_id": 34, "tree_name": "DATIN SBS"},
@@ -70,7 +72,8 @@ def parse_headers(html, base_url, tree_id):
 class Cacti:
     def __init__(self, server, session=None):
         self.server = server
-        self.config = SERVERS[server]
+        self.config = dict(SERVERS[server])
+        self.config['base_url'] = os.environ.get(f'CACTI_{server}_BASE_URL', self.config['base_url']).rstrip('/')
         self.base = self.config["base_url"]
         self.tree = self.config["tree_id"]
         self.session = session or requests.Session()
@@ -182,18 +185,10 @@ class HDWork:
 
 @contextmanager
 def single_instance():
-    # Mac/Linux: prevent an overlapping cron/manual run on the same agent machine.
-    import fcntl
-    path = Path(__file__).with_name(".sync_headers.lock")
-    with path.open("a") as handle:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            raise RuntimeError("Agent header lain masih berjalan pada komputer ini.") from error
-        try:
-            yield
-        finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+    # Also lock the old path to fence a still-running pre-migration agent.
+    with sync_locks():
+        require_migrated()
+        yield
 
 
 def run(args):
@@ -243,10 +238,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="Buat header yang belum ada dan simpan mapping ke HD Work")
     parser.add_argument("--server", choices=["ALL", "SBS", "SBU"], default="ALL")
-    parser.add_argument("--env-file", default=str(Path(__file__).with_name(".env")))
+    parser.add_argument("--env-file", default=str(Path(__file__).resolve().parents[1] / ".env"))
     parser.add_argument("--report", help="Simpan laporan JSON ke file lokal")
     args = parser.parse_args()
-    load_dotenv(args.env_file)
+    load_dotenv(args.env_file, interpolate=False, encoding="utf-8-sig")
     try:
         with single_instance():
             return run(args)

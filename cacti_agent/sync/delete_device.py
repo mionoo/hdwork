@@ -210,11 +210,11 @@ def main():
     parser.add_argument('--confirm-not', action='store_true', help='Human confirmation of NOT for this exact SID; absence alone is insufficient')
     parser.add_argument('--report', default=str(PLAN))
     parser.add_argument('--journal', default=str(JOURNAL))
-    parser.add_argument('--env-file', default=str(BASE / '.env'))
+    parser.add_argument('--env-file', default=str(BASE.parent / '.env'))
     args = parser.parse_args()
     if not args.confirm_not:
         parser.error('Uji manual wajib --confirm-not sesuai konfirmasi manusia atas SID 1165651712.')
-    load_dotenv(args.env_file)
+    load_dotenv(args.env_file, interpolate=False, encoding="utf-8-sig")
     api, client = None, None
     try:
         with single_instance():
@@ -224,22 +224,22 @@ def main():
             client.login()
             journal = Path(args.journal)
             if args.resume:
-                state = json.loads(journal.read_text())
+                state = json.loads(journal.read_text(encoding="utf-8-sig"))
                 validate_plan(state['plan'])
                 if state.get('phase') not in ('DELETE_CONFIRM_ATTEMPTED', 'HOST_ABSENT', 'VERIFIED'):
                     raise RuntimeError('Konfirmasi delete belum dicoba; --resume tidak boleh mengirim POST.')
                 verify_deleted(client, state, journal)
             elif args.apply:
-                plan = json.loads(Path(args.report).read_text())
+                plan = json.loads(Path(args.report).read_text(encoding="utf-8-sig"))
                 if journal.exists():
-                    previous = json.loads(journal.read_text())
+                    previous = json.loads(journal.read_text(encoding="utf-8-sig"))
                     if previous.get('phase') != 'CONFIRMATION_PREPARED' or previous.get('plan') != plan:
                         raise RuntimeError('Konfirmasi pernah dicoba/jurnal berbeda; gunakan --resume, jangan ulang delete.')
                 execute(client, api, plan, journal)
             elif journal.exists():
                 raise RuntimeError('Jurnal delete sudah ada; jangan ulang penghapusan.')
             elif args.prepare:
-                plan = json.loads(Path(args.report).read_text())
+                plan = json.loads(Path(args.report).read_text(encoding="utf-8-sig"))
                 result, soup, _ = prepare_confirmation(client, api, plan, journal)
                 # Print only non-secret confirmation structure for the pilot review.
                 print(json.dumps({'forms': [{'action': f.get('action'), 'method': f.get('method')} for f in soup.select('form')],

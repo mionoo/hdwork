@@ -1,6 +1,6 @@
 # Uji edit satu device DATIN
 
-`integrations/cacti-agent/edit_device.py` dibatasi pada SID `1165651712`,
+`cacti_agent/sync/edit_device.py` dibatasi pada SID `1165651712`,
 SBS host `8471`, DATIN tree `34`, header BANK JATIM `9127`.
 Ini bukan editor massal dan belum menjalankan perubahan berkala otomatis.
 Tidak membutuhkan SQL baru atau endpoint backend baru: sumber dan mapping
@@ -11,9 +11,9 @@ karena host, header, server, dan SID tetap sama.
 
 1. Ubah kolom SLOT/PORT/ONU di Sheet1 untuk SID tersebut memakai data yang benar,
    tetap STATUS OK, lalu sinkronkan ke HD Work.
-2. Jalankan `python3 integrations/cacti-agent/edit_device.py --plan`.
+2. Jalankan `python3 cacti_agent/sync/edit_device.py --plan`.
 3. Periksa pratinjau `edit-1165651712-plan.report.json` (nilai lama/baru).
-4. Jalankan `python3 integrations/cacti-agent/edit_device.py --apply`.
+4. Jalankan `python3 cacti_agent/sync/edit_device.py --apply`.
 5. Jurnal `edit-1165651712-execution.report.json` menyimpan intent sebelum POST
    dan hasil VERIFIED sesudah read-back.
 
@@ -39,7 +39,7 @@ di komputer agent ini, bukan di semua komputer.
 
 ## Jika timeout atau hasil belum pasti
 
-`python3 integrations/cacti-agent/edit_device.py --resume` hanya membaca dan
+`python3 cacti_agent/sync/edit_device.py --resume` hanya membaca dan
 merekonsiliasi hasil pada host yang sama. **Tidak pernah mengulang POST edit**.
 Jika nilai Cacti belum sama dengan target, script berhenti untuk pemeriksaan.
 Tidak rollback otomatis karena dapat menimpa perubahan pihak lain.

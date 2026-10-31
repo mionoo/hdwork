@@ -3,6 +3,13 @@ node_modules/
 frontend/node_modules/
 local_agent/node_modules/
 
+# collector
+collector_cacti/
+cacti_agent/**/*.report.json
+cacti_agent/**/*.lock
+__pycache__/
+*.pyc
+
 # Secrets and local configuration
 .env
 local_agent/.env

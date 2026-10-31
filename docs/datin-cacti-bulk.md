@@ -17,10 +17,10 @@ Tidak perlu mengubah Apps Script atau collector untuk fitur ini.
 ## Pratinjau seluruh kandidat
 
 ```bash
-python3 integrations/cacti-agent/bulk_sync.py --plan
+python3 cacti_agent/sync/bulk_sync.py --plan
 ```
 
-Periksa `integrations/cacti-agent/bulk-plan.report.json`: daftar SID, server,
+Periksa `cacti_agent/sync/bulk-plan.report.json`: daftar SID, server,
 instansi, konfigurasi, header lama atau header baru, serta jumlah header unik.
 File tidak berisi CSRF/password/token reservasi. File tetap privat karena
 memuat inventaris pelanggan. Hash mengikat isi rencana; jangan edit manual.
@@ -30,7 +30,7 @@ pembagian seimbang per server. Tanpa `--limit` berarti semua kandidat.
 ## Eksekusi rencana tetap
 
 ```bash
-python3 integrations/cacti-agent/bulk_sync.py --apply
+python3 cacti_agent/sync/bulk_sync.py --apply
 ```
 
 Agent melakukan preflight kedua server, menyimpan token ke jurnal privat atomik
@@ -48,7 +48,7 @@ yang benar-benar down bisa menghasilkan alarm normal.
 ## Jika terputus
 
 ```bash
-python3 integrations/cacti-agent/bulk_sync.py --resume
+python3 cacti_agent/sync/bulk_sync.py --resume
 ```
 
 Gunakan mesin, jurnal, dan backend yang sama. Jangan jalankan salinan jurnal

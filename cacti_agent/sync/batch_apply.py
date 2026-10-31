@@ -11,9 +11,10 @@ from batch_preview import header_dependencies
 from compare_devices import FIELDS, fetch_inventory, has_datin_identity, planned_description, validate_customer
 from pilot_apply import create_payload, execute_reserved_device, save_journal
 from sync_headers import Cacti, HDWork, SERVERS, checked_html, normalize
+from source_validation import validate_source
 
 
-CONFIG = json.loads((Path(__file__).resolve().parents[2] / 'src/config/datin-cacti-batch.json').read_text())
+CONFIG = json.loads((Path(__file__).resolve().parents[2] / 'src/config/datin-cacti-batch.json').read_text(encoding="utf-8-sig"))
 MANIFEST_FIELDS = ('sid', 'server', 'tree_id', 'institution', 'description', 'desired', 'creation_profile')
 
 
@@ -31,30 +32,16 @@ def freeze_manifest(rows):
     return manifest
 
 
-def validate_source(manifest, source):
-    aliases = {row['alias']: row['name'] for row in source.get('aliases', [])}
-    for row in manifest:
-        matches = [item for item in source['customers'] if item['sid'] == row['sid'] and normalize(item.get('server')) == row['server']]
-        if len(matches) != 1 or any(item['sid'] == row['sid'] for item in source.get('conflicts', [])):
-            raise RuntimeError('SID batch tidak tersedia unik pada sumber terbaru.')
-        item = matches[0]
-        name = normalize(item['customer_name'])
-        if (validate_customer(item) or (aliases.get(name) or name) != row['institution']
-                or planned_description(item) != row['description']
-                or any(str(item[key]) != row['desired'][key] for key in FIELDS)):
-            raise RuntimeError('Sumber berubah dari manifest yang disetujui.')
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--preview', default=str(Path(__file__).with_name('batch-10.report.json')))
-    parser.add_argument('--env-file', default=str(Path(__file__).with_name('.env')))
+    parser.add_argument('--env-file', default=str(Path(__file__).resolve().parents[1] / '.env'))
     parser.add_argument('--apply', action='store_true')
     args = parser.parse_args()
-    load_dotenv(args.env_file)
+    load_dotenv(args.env_file, interpolate=False, encoding="utf-8-sig")
     clients, api = {}, None
     try:
-        preview = json.loads(Path(args.preview).read_text())
+        preview = json.loads(Path(args.preview).read_text(encoding="utf-8-sig"))
         manifest = freeze_manifest(preview['devices'])
         dependencies = header_dependencies(manifest)
         api = HDWork()

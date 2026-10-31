@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from bs4 import BeautifulSoup
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'integrations/cacti-agent'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'cacti_agent/sync'))
 import delete_device as delete
 from test_cacti_edit import live
 

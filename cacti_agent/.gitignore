@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+*.lock
+__pycache__/
+*.pyc
+*.report.json
+*.report.csv
+*.log
+.venv/

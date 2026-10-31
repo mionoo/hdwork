@@ -21,6 +21,7 @@ from pilot_apply import attach_payload, create_payload
 from pilot_preview import creation_profile
 from reconcile_forms import read_host, edit_payload, device_actions, references, require_exclusive, delete_confirmation
 from sync_headers import Cacti, HDWork, SERVERS, checked_html, normalize, single_instance
+from agent_support import install_worker_signals
 
 BASE = Path(__file__).resolve().parent
 
@@ -477,7 +478,7 @@ def cycle(args):
             print(json.dumps(report['summary'], ensure_ascii=False)); print(f'Pratinjau: {args.report}. Tidak ada penulisan ke Cacti/database.')
             return
         if journal.exists():
-            state = json.loads(journal.read_text())
+            state = json.loads(journal.read_text(encoding="utf-8-sig"))
         else:
             state = {'run_id': str(uuid.uuid4()), 'token': secrets.token_hex(32), 'spreadsheet_id': source['spreadsheet_id'],
                      'jobs': [], 'started_at': datetime.now(timezone.utc).isoformat()}
@@ -519,7 +520,7 @@ def cycle(args):
             try:
                 journal = Path(args.journal)
                 if journal.exists():
-                    state = json.loads(journal.read_text())
+                    state = json.loads(journal.read_text(encoding="utf-8-sig"))
                     message = str(error) if isinstance(error, RuntimeError) else type(error).__name__
                     state['last_error'] = message
                     durable(journal, state)
@@ -534,6 +535,7 @@ def cycle(args):
 
 
 def main():
+    install_worker_signals()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--plan', action='store_true')
     parser.add_argument('--apply', action='store_true')
@@ -541,13 +543,13 @@ def main():
     parser.add_argument('--interval', type=int, default=600)
     parser.add_argument('--delay', type=float, default=2)
     parser.add_argument('--full-audit', action='store_true', help='Read every mapped host instead of using the last verified configuration cache')
-    parser.add_argument('--env-file', default=str(BASE / '.env'))
+    parser.add_argument('--env-file', default=str(BASE.parent / '.env'))
     parser.add_argument('--report', default=str(BASE / 'reconcile-plan.report.json'))
     parser.add_argument('--journal', default=str(BASE / 'reconcile-active.report.json'))
     args = parser.parse_args()
     if (args.plan and args.apply) or (args.watch and not args.apply) or args.interval < 600 or not 2 <= args.delay <= 60:
         parser.error('Gunakan --plan atau --apply; --watch wajib --apply; interval minimum 600 detik, delay 2–60.')
-    load_dotenv(args.env_file)
+    load_dotenv(args.env_file, interpolate=False, encoding="utf-8-sig")
     try:
         with single_instance():
             while True:
