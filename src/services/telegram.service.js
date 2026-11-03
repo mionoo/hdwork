@@ -393,11 +393,30 @@ function replyOptions(notification) {
   };
 }
 
-async function sendResultFiles(notification, options) {
+async function sendResultFiles(notification, options, caption) {
   const deliveries = [];
   const errors = [];
 
-  for (const file of notification.files || []) {
+  const files = notification.files || [];
+  // Telegram albums accept 2–10 photos, or 2–10 documents of the same kind.
+  const allPhotos = files.every((file) => file.mime_type?.startsWith("image/"));
+  const allDocuments = files.every((file) => !file.mime_type?.startsWith("image/"));
+  if (files.length >= 2 && files.length <= 10 && files.every((file) => file.local_path) && (allPhotos || allDocuments)) {
+    try {
+      const messages = await bot.telegram.sendMediaGroup(notification.chat_id, files.map((file, index) => ({
+        type: allPhotos ? "photo" : "document",
+        media: { source: file.local_path, filename: file.file_name },
+        ...(index === 0 && caption ? { caption } : {}),
+      })), options);
+      return { deliveries: messages.map((message) => message.message_id), errors };
+    } catch (error) {
+      // Do not retry as separate messages: an ambiguous API failure could duplicate an album.
+      console.error("Pengiriman album Telegram gagal:", error.message);
+      return { deliveries, errors: [error.message] };
+    }
+  }
+
+  for (const [index, file] of files.entries()) {
     if (!file.local_path) {
       errors.push(`${file.file_name || "Lampiran"}: file lokal tidak ditemukan`);
       continue;
@@ -405,9 +424,10 @@ async function sendResultFiles(notification, options) {
 
     try {
       const filePayload = { source: file.local_path, filename: file.file_name };
+      const fileOptions = { ...options, ...(index === 0 && caption ? { caption } : {}) };
       const message = file.mime_type?.startsWith("image/")
-        ? await bot.telegram.sendPhoto(notification.chat_id, filePayload, options)
-        : await bot.telegram.sendDocument(notification.chat_id, filePayload, options);
+        ? await bot.telegram.sendPhoto(notification.chat_id, filePayload, fileOptions)
+        : await bot.telegram.sendDocument(notification.chat_id, filePayload, fileOptions);
       deliveries.push(message.message_id);
     } catch (error) {
       console.error("Pengiriman lampiran Telegram gagal:", error.message);
@@ -427,11 +447,13 @@ async function notifyOrderResult(notification) {
   const deliveries = [];
   const errors = [];
   const content = notification.content?.trim();
+  const hasFiles = notification.files?.length > 0;
+  const useCaption = hasFiles && content && content.length <= 1024;
 
-  try {
+  if (content && !useCaption) try {
     const message = await bot.telegram.sendMessage(
       notification.chat_id,
-      `oleh ${notification.user_name}${content ? `\n\n${content}` : "\n\nLampiran hasil pekerjaan."}`,
+      content,
       options,
     );
     deliveries.push(message.message_id);
@@ -440,7 +462,7 @@ async function notifyOrderResult(notification) {
     errors.push(error.message);
   }
 
-  const fileDelivery = await sendResultFiles(notification, options);
+  const fileDelivery = await sendResultFiles(notification, options, useCaption ? content : undefined);
   deliveries.push(...fileDelivery.deliveries);
   errors.push(...fileDelivery.errors);
 
@@ -450,24 +472,6 @@ async function notifyOrderResult(notification) {
     message_id: deliveries[0] || null,
     error: errors.length ? errors.join("; ") : null,
   };
-}
-
-async function notifyOrderCompleted(notification) {
-  if (!bot || !notification?.chat_id) {
-    return { delivered: false, error: "Bot atau tujuan Telegram tidak tersedia" };
-  }
-
-  try {
-    await bot.telegram.sendMessage(
-      notification.chat_id,
-      `✅ Order selesai oleh ${notification.user_name}`,
-      replyOptions(notification),
-    );
-    return { delivered: true, error: null };
-  } catch (error) {
-    console.error("Pengiriman completion Telegram gagal:", error.message);
-    return { delivered: false, error: error.message };
-  }
 }
 
 async function sendMessage(chatId, text, threadId = 0) {
@@ -540,7 +544,6 @@ module.exports = {
   startPolling,
   notifyOrderClaim,
   notifyOrderResult,
-  notifyOrderCompleted,
   sendMessage,
   sendPersonalAlarmMessage,
 };

@@ -329,15 +329,15 @@ async function completeOrder(req, res) {
         }
       }
     }
-    const completionDelivery = await telegramService.notifyOrderCompleted(result.telegram);
-    const allTelegramDelivered = completionDelivery.delivered
-      && (!resultDelivery || resultDelivery.delivered);
+    // Results already sent earlier are not repeated when completing an order.
+    const completionDelivery = { delivered: false, skipped: true, error: null };
+    const allTelegramDelivered = !resultDelivery || resultDelivery.delivered;
     realtimeService.emitOrdersChanged();
 
     return res.status(200).json({
       success: true,
       message: allTelegramDelivered
-        ? "Order berhasil diselesaikan dan dikirim ke Telegram"
+        ? (resultDelivery ? "Order berhasil diselesaikan dan hasil dikirim ke Telegram" : "Order berhasil diselesaikan")
         : "Order sudah diselesaikan; pengiriman Telegram perlu diperiksa",
       data: { ...result, telegram_delivery: { result: resultDelivery, completion: completionDelivery } },
     });
