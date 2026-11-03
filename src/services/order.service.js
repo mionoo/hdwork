@@ -1,9 +1,23 @@
 const orderRepository = require("../repositories/order.repository");
+const breakoutRepository = require("../repositories/breakout.repository");
 
 async function getAllOrders(filters, currentUser) {
   const scopedFilters = {
     ...filters,
   };
+
+  if (filters.telegram_group_id !== undefined) {
+    const groupId = Number(filters.telegram_group_id);
+    if (typeof filters.telegram_group_id !== "string" || !/^\d+$/.test(filters.telegram_group_id)
+      || !Number.isSafeInteger(groupId) || groupId < 1) {
+      throw Object.assign(new Error("ID ruang tidak valid"), { statusCode: 400 });
+    }
+    const { rooms } = await breakoutRepository.list(currentUser.id);
+    if (!rooms.some((room) => Number(room.id) === groupId)) {
+      throw Object.assign(new Error("Ruang tidak tersedia atau tidak dapat diakses"), { statusCode: 403 });
+    }
+    scopedFilters.telegram_group_id = groupId;
+  }
 
   if (currentUser.role === "HD") {
     scopedFilters.city_id = currentUser.city_id;

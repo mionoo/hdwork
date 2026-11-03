@@ -51,12 +51,14 @@ export async function getOrders(
   filters: {
     cityId?: string
     segmentId?: string
+    groupId?: string
   } = {},
 ): Promise<Order[]> {
   const query = new URLSearchParams()
 
   if (filters.cityId) query.set("city_id", filters.cityId)
   if (filters.segmentId) query.set("segment_id", filters.segmentId)
+  if (filters.groupId) query.set("telegram_group_id", filters.groupId)
 
   const queryString = query.toString()
 

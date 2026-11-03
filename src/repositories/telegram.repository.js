@@ -49,30 +49,33 @@ async function saveGroup({
   segmentId,
   category,
 }) {
-  const [result] = await pool.query(
-    `
-    INSERT INTO telegram_groups (
-      telegram_chat_id,
-      telegram_thread_id,
-      name,
-      city_id,
-      segment_id,
-      category,
-      is_active
-    )
-    VALUES (?, ?, ?, ?, ?, ?, 1)
-    ON DUPLICATE KEY UPDATE
-      name = VALUES(name),
-      city_id = VALUES(city_id),
-      segment_id = VALUES(segment_id),
-      category = VALUES(category),
-      is_active = 1,
-      updated_at = CURRENT_TIMESTAMP
-    `,
-    [chatId, threadId, name, cityId, segmentId, category],
-  );
-
-  return result;
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [[existing]] = await connection.query(
+      "SELECT id, category FROM telegram_groups WHERE telegram_chat_id = ? AND telegram_thread_id = ? FOR UPDATE",
+      [chatId, threadId],
+    );
+    if (existing && !["PENGAWALAN", "LOGIC"].includes(existing.category)) {
+      throw Object.assign(new Error("Grup/topic ini sudah digunakan untuk alarm"), { statusCode: 409 });
+    }
+    const [result] = existing
+      ? await connection.query(
+        "UPDATE telegram_groups SET name=?, city_id=?, segment_id=?, category=?, is_active=1, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        [name, cityId, segmentId, category, existing.id],
+      )
+      : await connection.query(
+        "INSERT INTO telegram_groups (telegram_chat_id, telegram_thread_id, name, city_id, segment_id, category, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)",
+        [chatId, threadId, name, cityId, segmentId, category],
+      );
+    await connection.commit();
+    return result;
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
 }
 
 async function getGroupByChatThread(chatId, threadId) {

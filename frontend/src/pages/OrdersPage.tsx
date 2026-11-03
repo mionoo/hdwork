@@ -47,7 +47,7 @@ function formatDateTime(value: string) {
   }).format(new Date(value))
 }
 
-export default function OrdersPage() {
+export default function OrdersPage({ room }: { room: { id: number; name: string; context: string } }) {
   const { token, user } = useAuth()
   const navigate = useNavigate()
 
@@ -80,15 +80,6 @@ export default function OrdersPage() {
   const [quickCompleteError, setQuickCompleteError] = useState("")
   const [quickActionLoading, setQuickActionLoading] = useState(false)
 
-  const [filters, setFilters] = useState({
-    cityId: "",
-  })
-  const [listFilters, setListFilters] = useState({ segmentId: "", groupCategory: "" })
-
-  const [filterOptions, setFilterOptions] = useState({
-    cities: [] as Array<{ id: number; name: string }>,
-  })
-
   async function loadOrders() {
     if (!token) return
 
@@ -96,17 +87,10 @@ export default function OrdersPage() {
       setLoading(true)
       setError("")
 
-      const data = await getOrders(token, filters)
+      const data = await getOrders(token, { groupId: String(room.id) })
 
       setOrders(data)
 
-      if (!filters.cityId) {
-        setFilterOptions({
-          cities: Array.from(
-            new Map(data.map((order) => [order.city_id, order.city_name])).entries(),
-          ).map(([id, name]) => ({ id, name })),
-        })
-      }
     } catch (error) {
       if (error instanceof Error) {
         setError(error.message)
@@ -120,7 +104,7 @@ export default function OrdersPage() {
 
   useEffect(() => {
     loadOrders()
-  }, [token, filters])
+  }, [token, room.id])
 
   useEffect(() => {
     if (!token) return
@@ -133,7 +117,7 @@ export default function OrdersPage() {
     return () => {
       socket.disconnect()
     }
-  }, [token, filters.cityId])
+  }, [token, room.id])
 
   async function handleClaim(order: Order) {
     if (!token) return
@@ -256,17 +240,7 @@ export default function OrdersPage() {
     }
   }
 
-  const canFilterCity = user?.role === "SUPER_ADMIN"
-  const activeOrders = orders.filter((order) => order.status !== "DONE")
-  const segmentOptions = Array.from(
-    new Map(activeOrders.map((order) => [String(order.segment_id), order.segment_code])).entries(),
-  ).sort((a, b) => a[1].localeCompare(b[1]))
-  const hasListFilters = Boolean(listFilters.segmentId || listFilters.groupCategory)
-  const visibleOrders = activeOrders.filter((order) =>
-    (!listFilters.segmentId || String(order.segment_id) === listFilters.segmentId)
-    && (!listFilters.groupCategory || order.telegram_group_category === listFilters.groupCategory),
-  )
-  const resetListFilters = () => setListFilters({ segmentId: "", groupCategory: "" })
+  const visibleOrders = orders.filter((order) => order.status !== "DONE")
   const canQuickAction = (order: Order) => user?.role === "HD"
     && order.performance_owner_id === user.id
     && (order.status === "IN_PROGRESS" || order.status === "ESCALATED")
@@ -284,13 +258,13 @@ export default function OrdersPage() {
       <div className="mx-auto max-w-7xl space-y-6">
 
         <div className="sticky top-0 z-20 -mx-6 border-b bg-muted/95 px-6 py-3 backdrop-blur supports-[backdrop-filter]:bg-muted/75">
-          <h1 className="text-3xl font-semibold">
-            Orders
-          </h1>
-
-          <p className="text-muted-foreground">
-            Daftar order yang dapat kamu akses
-          </p>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h1 className="text-3xl font-semibold">Orders · {room.name}</h1>
+              <p className="text-muted-foreground">{room.context}</p>
+            </div>
+            <Button variant="outline" onClick={() => navigate("/breakout-room", { replace: true })}>Keluar ruang</Button>
+          </div>
         </div>
 
         {error && (
@@ -305,44 +279,6 @@ export default function OrdersPage() {
           </p>
         )}
 
-        {canFilterCity && (
-          <Card>
-            <CardContent className="flex flex-wrap items-end gap-3 pt-4">
-              {canFilterCity && (
-                <div className="grid gap-1.5">
-                  <label className="text-sm font-medium" htmlFor="city-filter">
-                    Kota
-                  </label>
-                  <select
-                    id="city-filter"
-                    className="h-9 min-w-40 rounded-lg border bg-background px-3 text-sm"
-                    value={filters.cityId}
-                    onChange={(event) =>
-                      setFilters((current) => ({ ...current, cityId: event.target.value }))
-                    }
-                  >
-                    <option value="">Semua kota</option>
-                    {filterOptions.cities.map((city) => (
-                      <option key={city.id} value={city.id}>
-                        {city.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {filters.cityId && (
-                <Button
-                  variant="ghost"
-                  onClick={() => setFilters({ cityId: "" })}
-                >
-                  Reset Filter
-                </Button>
-              )}
-            </CardContent>
-          </Card>
-        )}
-
         <Card>
           <CardHeader>
             <CardTitle>
@@ -351,42 +287,7 @@ export default function OrdersPage() {
           </CardHeader>
 
           <CardContent>
-            <div className="mb-4 space-y-3">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                <div className="grid gap-1.5 sm:w-48">
-                  <label className="text-sm font-medium" htmlFor="order-segment-filter">Segment</label>
-                  <select
-                    id="order-segment-filter"
-                    className="h-10 w-full rounded-lg border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    value={listFilters.segmentId}
-                    onChange={(event) => setListFilters((current) => ({ ...current, segmentId: event.target.value }))}
-                  >
-                    <option value="">Semua segment</option>
-                    {segmentOptions.map(([id, code]) => <option key={id} value={id}>{code}</option>)}
-                    {listFilters.segmentId && !segmentOptions.some(([id]) => id === listFilters.segmentId) && (
-                      <option value={listFilters.segmentId}>Segment terpilih (tidak ada order aktif)</option>
-                    )}
-                  </select>
-                </div>
-                <div className="grid gap-1.5 sm:w-48">
-                  <label className="text-sm font-medium" htmlFor="order-group-filter">Jenis Grup</label>
-                  <select
-                    id="order-group-filter"
-                    className="h-10 w-full rounded-lg border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    value={listFilters.groupCategory}
-                    onChange={(event) => setListFilters((current) => ({ ...current, groupCategory: event.target.value }))}
-                  >
-                    <option value="">Semua jenis grup</option>
-                    <option value="LOGIC">Logic</option>
-                    <option value="PENGAWALAN">Pengawalan</option>
-                  </select>
-                </div>
-                {hasListFilters && <Button variant="ghost" className="h-10" onClick={resetListFilters}>Reset filter</Button>}
-              </div>
-              <p className="text-sm text-muted-foreground" role="status" aria-live="polite">
-                Menampilkan {visibleOrders.length} dari {activeOrders.length} order
-              </p>
-            </div>
+            <p className="mb-3 text-sm text-muted-foreground" role="status">Menampilkan {visibleOrders.length} order aktif</p>
             <div className="overflow-x-auto">
 
               <table className="w-full text-sm">
@@ -515,6 +416,7 @@ export default function OrdersPage() {
                           onClick={() =>
                             navigate(
                               `/orders/${order.id}`,
+                              { state: { roomId: room.id } },
                             )
                           }
                         >
@@ -533,8 +435,7 @@ export default function OrdersPage() {
 
               {visibleOrders.length === 0 && (
                 <div className="py-8 text-center text-muted-foreground">
-                  <p>{hasListFilters ? "Tidak ada order yang sesuai filter" : "Tidak ada order aktif"}</p>
-                  {hasListFilters && <Button variant="outline" className="mt-3" onClick={resetListFilters}>Reset filter</Button>}
+                  Tidak ada order aktif di ruang ini
                 </div>
               )}
 

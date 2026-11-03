@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -41,6 +41,7 @@ export default function OrderDetailPage() {
   const { token, user } = useAuth();
   const { id } = useParams();
   const navigate = useNavigate();
+  const roomId = useLocation().state?.roomId;
 
   const [detail, setDetail] = useState<OrderDetail | null>(null);
 
@@ -449,7 +450,7 @@ export default function OrderDetailPage() {
             </Button>
           )}
 
-          <Button variant="outline" onClick={() => navigate("/orders")}>
+          <Button variant="outline" onClick={() => navigate(roomId ? `/orders?room=${roomId}` : "/breakout-room")}>
             Kembali
           </Button>
         </div>

@@ -6,7 +6,7 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import DashboardPage from "@/pages/DashboardPage";
 import AttendancePage from "@/pages/AttendancePage";
 import LoginPage from "@/pages/LoginPage";
-import OrdersPage from "@/pages/OrdersPage";
+import BreakoutRoomPage, { RoomOrdersRoute } from "@/pages/BreakoutRoomPage";
 import OrderDetailPage from "@/pages/OrderDetailPage";
 import TeamPage from "@/pages/TeamPage";
 import ReportsPage from "@/pages/ReportsPage";
@@ -25,7 +25,8 @@ function App() {
             <Route element={<AppSidebar />}>
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/attendance" element={<AttendancePage />} />
-              <Route path="/orders" element={<OrdersPage />} />
+              <Route path="/breakout-room" element={<BreakoutRoomPage />} />
+              <Route path="/orders" element={<RoomOrdersRoute />} />
               <Route path="/orders/:id" element={<OrderDetailPage />} />
               <Route path="/team" element={<TeamPage />} />
               <Route path="/reports" element={<ReportsPage />} />
@@ -35,7 +36,7 @@ function App() {
             </Route>
           </Route>
 
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/" element={<Navigate to="/breakout-room" replace />} />
         </Routes>
       </AuthProvider>
     </BrowserRouter>

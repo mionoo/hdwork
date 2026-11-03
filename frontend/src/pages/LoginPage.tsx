@@ -57,7 +57,7 @@ export default function LoginPage() {
       }
       login(response.data.token, response.data.user)
       setPassword("")
-      navigate("/dashboard", { replace: true })
+      navigate("/breakout-room", { replace: true })
     } catch (error) {
       setError(error instanceof TypeError
         ? "Tidak dapat terhubung ke server. Periksa koneksi Anda dan coba kembali."

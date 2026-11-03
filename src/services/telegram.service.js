@@ -65,12 +65,6 @@ function categoryKeyboard(cityId, segmentId) {
   ]]);
 }
 
-function replaceKeyboard(groupId, cityId, segmentId, category) {
-  return Markup.inlineKeyboard([
-    [Markup.button.callback("Pindahkan konfigurasi ke grup ini", `setgroup:replace:${groupId}:${cityId}:${segmentId}:${category}`)],
-    [Markup.button.callback("Batal", "setgroup:cancel")],
-  ]);
-}
 
 function datinButtonLabel(name, selected) {
   const prefix = selected ? "✅ " : "▫️ ";
@@ -341,21 +335,12 @@ async function ensureCallbackAdmin(ctx) {
 async function configureGroup(ctx, cityId, segmentId, category) {
   const message = ctx.callbackQuery.message;
   const threadId = getThreadId(message);
-  const existing = await telegramRepository.getGroupByScope(cityId, segmentId, category);
-  if (existing && (Number(existing.telegram_chat_id) !== Number(message.chat.id) || Number(existing.telegram_thread_id) !== Number(threadId))) {
-    await ctx.editMessageText([
-      "Scope ini sudah digunakan oleh grup/topic lain.", "",
-      "Jika dilanjutkan, konfigurasi akan dipindahkan ke grup/topic ini.",
-      "Order yang sudah ada tetap aman.",
-    ].join("\n"), replaceKeyboard(existing.id, cityId, segmentId, category));
-    return;
-  }
   await telegramRepository.saveGroup({ chatId: message.chat.id, threadId, name: groupName(message.chat, threadId), cityId, segmentId, category });
   const cities = await telegramRepository.getCities();
   const segments = await telegramRepository.getSegments();
   const city = cities.find((item) => Number(item.id) === Number(cityId));
   const segment = segments.find((item) => Number(item.id) === Number(segmentId));
-  await ctx.editMessageText(["✅ Grup berhasil dikonfigurasi", `Kota: ${city?.name || cityId}`, `Segmen: ${segment?.code || segmentId}`, `Jenis: ${category === "PENGAWALAN" ? "Pengawalan" : "Logic"}`].join("\n"));
+  await ctx.editMessageText(["✅ Grup berhasil dikonfigurasi", `Kota: ${city?.name || cityId}`, `Segmen: ${segment?.code || segmentId}`, `Jenis: ${category === "PENGAWALAN" ? "Pengawalan" : "Logic"}`, "Atur alur kerja di Konfigurasi Grup HD Work agar grup muncul di Breakout Room."].join("\n"));
 }
 
 function registerHandlers() {
@@ -371,7 +356,6 @@ function registerHandlers() {
   bot.action(/^setgroup:city:(\d+)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; const segments = await telegramRepository.getSegments(); await ctx.editMessageText("Konfigurasi grup order\n\n2/3 — Pilih segmen:", segmentKeyboard(ctx.match[1], segments)); await ctx.answerCbQuery(); });
   bot.action(/^setgroup:segment:(\d+):(\d+)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await ctx.editMessageText("Konfigurasi grup order\n\n3/3 — Pilih jenis grup:", categoryKeyboard(ctx.match[1], ctx.match[2])); await ctx.answerCbQuery(); });
   bot.action(/^setgroup:category:(\d+):(\d+):(PENGAWALAN|LOGIC)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await configureGroup(ctx, ctx.match[1], ctx.match[2], ctx.match[3]); await ctx.answerCbQuery(); });
-  bot.action(/^setgroup:replace:(\d+):(\d+):(\d+):(PENGAWALAN|LOGIC)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; const message = ctx.callbackQuery.message; const threadId = getThreadId(message); await telegramRepository.moveGroupBinding({ groupId: ctx.match[1], chatId: message.chat.id, threadId, name: groupName(message.chat, threadId) }); await ctx.editMessageText(`✅ Konfigurasi ${ctx.match[4] === "PENGAWALAN" ? "Pengawalan" : "Logic"} berhasil dipindahkan ke grup/topic ini.`); await ctx.answerCbQuery(); });
   bot.action("setgroup:cancel", async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await ctx.editMessageText("Konfigurasi grup dibatalkan."); await ctx.answerCbQuery(); });
   bot.action(/^alarmdatin:page:(\d+)$/, async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; await renderDatinInstitutionChoices(ctx, Number(ctx.match[1]), true); await ctx.answerCbQuery(); } catch (error) { console.error("Halaman /alarmdatin gagal:", error.message); await ctx.answerCbQuery("Gagal memuat pilihan.", { show_alert: true }); } });
   bot.action(/^alarmdatin:toggle:(\d+):(\d+)$/, async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; const selected = await telegramRepository.toggleDatinSubscription(ctx.from.id, Number(ctx.match[1])); await renderDatinInstitutionChoices(ctx, Number(ctx.match[2]), true); await ctx.answerCbQuery(selected === null ? "Daftar instansi berubah. Pilih dari daftar terbaru." : undefined); } catch (error) { console.error("Pilihan /alarmdatin gagal:", error.message); await ctx.answerCbQuery("Gagal menyimpan pilihan.", { show_alert: true }); } });
