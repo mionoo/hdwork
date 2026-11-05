@@ -40,6 +40,7 @@ function initialize(socketServer) {
       return;
     }
     const { agent } = socket.data;
+    socket.join(`user:${agent.user_id}`);
     socketsByUserId.set(Number(agent.user_id), socket);
     await agentRepository.markConnected(agent.id);
     console.log(`🤖 Local Agent connected: ${agent.name} (${socket.id})`);
@@ -80,6 +81,10 @@ function getNamespace() {
   return agentNamespace;
 }
 
+function disconnectUser(userId) {
+  agentNamespace?.in(`user:${userId}`).disconnectSockets(true);
+}
+
 async function requestAgentCommand(userId, event, payload, timeout = 10_000) {
   if (!agentNamespace) {
     throw agentUnavailableError("Agent Gateway belum siap");
@@ -108,4 +113,4 @@ async function requestSshTest(userId, payload) {
   return requestAgentCommand(userId, "network:ssh-test", payload, 15_000);
 }
 
-module.exports = { initialize, getNamespace, requestPing, requestSshTest, requestAgentCommand, emitToUserAgent, setTerminalEventHandlers, pairAgent, isUserAgentConnected };
+module.exports = { initialize, getNamespace, requestPing, requestSshTest, requestAgentCommand, emitToUserAgent, setTerminalEventHandlers, pairAgent, isUserAgentConnected, disconnectUser };

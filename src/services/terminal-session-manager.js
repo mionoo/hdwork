@@ -51,6 +51,12 @@ function createTerminalSessionManager({ agent, executeTool, graceMs = 60_000, ou
     }
   }
 
+  function closeUserSessions(userId) {
+    for (const session of sessions.values()) {
+      if (session.userId === Number(userId)) destroy(session, "Akun sudah dihapus.");
+    }
+  }
+
   function initialize(io) {
     agent.setTerminalEventHandlers({
       data: (source, payload) => {
@@ -178,6 +184,6 @@ function createTerminalSessionManager({ agent, executeTool, graceMs = 60_000, ou
       });
     });
   }
-  return { initialize, closeLoginSessions };
+  return { initialize, closeLoginSessions, closeUserSessions };
 }
 module.exports = { createTerminalSessionManager };

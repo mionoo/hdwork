@@ -8,4 +8,8 @@ function emitOrdersChanged() {
   io?.emit("orders:changed");
 }
 
-module.exports = { initialize, emitOrdersChanged };
+function disconnectUser(userId) {
+  io?.in(`user:${userId}`).disconnectSockets(true);
+}
+
+module.exports = { initialize, emitOrdersChanged, disconnectUser };

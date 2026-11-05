@@ -6,4 +6,5 @@ module.exports = {
   createUser: (actorId, payload) => userRepository.createUser(actorId, payload),
   updateUser: (actorId, userId, payload) => userRepository.updateUser(actorId, userId, payload),
   resetPassword: (actorId, userId, password) => userRepository.resetPassword(actorId, userId, password),
+  deleteUser: (actorId, userId, username) => userRepository.deleteUser(actorId, userId, username),
 };

@@ -19,3 +19,6 @@ export function getUserOptions(token:string) { return request<UserOptions>(token
 export function createManagedUser(token:string,payload:UserPayload) { return request<{id:number}>(token,"/",{method:"POST",body:JSON.stringify(payload)}) }
 export function updateManagedUser(token:string,id:number,payload:UserPayload) { return request<{id:number}>(token,`/${id}`,{method:"PATCH",body:JSON.stringify(payload)}) }
 export function resetManagedPassword(token:string,id:number,password:string) { return request<void>(token,`/${id}/reset-password`,{method:"POST",body:JSON.stringify({password})}) }
+export function deleteManagedUser(token: string, id: number, username: string) {
+  return request<void>(token, `/${id}`, { method: "DELETE", body: JSON.stringify({ username }) })
+}

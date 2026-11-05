@@ -1,4 +1,7 @@
 const userService = require("../services/user.service");
+const realtime = require("../services/realtime.service");
+const agents = require("../services/agent-realtime.service");
+const terminal = require("../services/terminal-realtime.service");
 
 function respondError(res, error, fallback) {
   return res.status(error.statusCode || 500).json({ success: false, message: error.message || fallback });
@@ -29,4 +32,20 @@ async function resetPassword(req, res) {
   catch (error) { return respondError(res, error, "Gagal reset password"); }
 }
 
-module.exports = { listUsers, getOptions, createUser, updateUser, resetPassword };
+async function deleteUser(req, res) {
+  try {
+    await userService.deleteUser(req.user.id, req.params.id, req.body?.username);
+  } catch (error) {
+    if (error.statusCode) return respondError(res, error, "Gagal menghapus user");
+    console.error("Penghapusan user gagal:", error.code || error.name);
+    return res.status(500).json({ success: false, message: "Gagal menghapus user. Tidak ada data yang diubah." });
+  }
+  const userId = Number(req.params.id);
+  terminal.closeUserSessions(userId);
+  agents.disconnectUser(userId);
+  realtime.disconnectUser(userId);
+  realtime.emitOrdersChanged();
+  return res.json({ success: true });
+}
+
+module.exports = { listUsers, getOptions, createUser, updateUser, resetPassword, deleteUser };

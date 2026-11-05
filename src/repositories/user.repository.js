@@ -137,4 +137,62 @@ async function resetPassword(actorId, userId, password) {
   } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }
 
-module.exports = { listUsers, getOptions, createUser, updateUser, resetPassword };
+async function deleteUser(actorId, userId, username) {
+  const targetId = Number(userId);
+  if (!/^\d+$/.test(String(userId)) || !Number.isSafeInteger(targetId) || targetId < 1) {
+    throw Object.assign(new Error("ID user tidak valid"), { statusCode: 400 });
+  }
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    // Lock both accounts so a concurrent delete or role change cannot bypass the checks.
+    const [users] = await connection.query(
+      "SELECT id, username, role, is_active FROM users WHERE id IN (?, ?) ORDER BY id FOR UPDATE",
+      [actorId, targetId],
+    );
+    const actor = users.find((user) => Number(user.id) === Number(actorId));
+    if (!actor?.is_active || actor.role !== "SUPER_ADMIN") {
+      throw Object.assign(new Error("Hanya Super Admin yang dapat menghapus user"), { statusCode: 403 });
+    }
+    if (Number(actor.id) === targetId) {
+      throw Object.assign(new Error("Anda tidak dapat menghapus akun sendiri"), { statusCode: 409 });
+    }
+    const target = users.find((user) => Number(user.id) === targetId);
+    if (!target) throw Object.assign(new Error("User tidak ditemukan"), { statusCode: 404 });
+    if (typeof username !== "string" || username.trim() !== target.username) {
+      throw Object.assign(new Error("Ketik username akun dengan tepat untuk mengonfirmasi"), { statusCode: 400 });
+    }
+    const [[active]] = await connection.query(
+      `SELECT o.id FROM orders o
+       WHERE o.status <> 'DONE' AND (o.performance_owner_id = ? OR EXISTS (
+         SELECT 1 FROM order_assignments oa WHERE oa.order_id = o.id AND oa.user_id = ? AND oa.released_at IS NULL
+       )) LIMIT 1 FOR UPDATE`,
+      [targetId, targetId],
+    );
+    if (active) {
+      throw Object.assign(new Error(`Order #${active.id} masih aktif. Pindahkan atau selesaikan order sebelum menghapus akun.`), { statusCode: 409 });
+    }
+
+    // Only unlink the user. Order statuses, activity, results and attachments stay intact.
+    await connection.query("UPDATE orders SET performance_owner_id = NULL WHERE performance_owner_id = ?", [targetId]);
+    await connection.query("UPDATE order_assignments SET user_id = NULL WHERE user_id = ?", [targetId]);
+    await connection.query("UPDATE order_events SET actor_user_id = NULL WHERE actor_user_id = ?", [targetId]);
+    await connection.query("UPDATE order_events SET target_user_id = NULL WHERE target_user_id = ?", [targetId]);
+    await connection.query("UPDATE order_notes SET user_id = NULL WHERE user_id = ?", [targetId]);
+    await connection.query("UPDATE order_results SET user_id = NULL WHERE user_id = ?", [targetId]);
+    await connection.query("DELETE ab FROM attendance_breaks ab JOIN attendance a ON a.id = ab.attendance_id WHERE a.user_id = ?", [targetId]);
+    await connection.query("DELETE FROM attendance WHERE user_id = ?", [targetId]);
+    await connection.query("DELETE FROM local_agents WHERE user_id = ?", [targetId]);
+    await connection.query("DELETE FROM user_segments WHERE user_id = ?", [targetId]);
+    await connection.query("DELETE FROM users WHERE id = ?", [targetId]);
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    if (error.code === "ER_ROW_IS_REFERENCED_2") {
+      throw Object.assign(new Error("Akun masih terhubung ke data lain. Penghapusan dibatalkan."), { statusCode: 409 });
+    }
+    throw error;
+  } finally { connection.release(); }
+}
+
+module.exports = { listUsers, getOptions, createUser, updateUser, resetPassword, deleteUser };

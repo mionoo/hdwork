@@ -2,7 +2,7 @@ require("dotenv").config();
 
 const http = require("http");
 const { Server } = require("socket.io");
-const jwt = require("jsonwebtoken");
+const { authenticateToken } = require("./src/services/auth.service");
 const app = require("./src/app");
 const pool = require("./src/config/database");
 const telegramService = require("./src/services/telegram.service");
@@ -16,9 +16,12 @@ const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:5173";
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: FRONTEND_ORIGIN } });
 
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   try {
-    socket.data.user = jwt.verify(socket.handshake.auth?.token, process.env.JWT_SECRET);
+    const user = await authenticateToken(socket.handshake.auth?.token);
+    if (!user) return next(new Error("Unauthorized"));
+    socket.data.user = user;
+    await socket.join(`user:${user.id}`);
     next();
   } catch {
     next(new Error("Unauthorized"));

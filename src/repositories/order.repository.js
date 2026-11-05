@@ -1378,12 +1378,12 @@ async function getOrderDetail(orderId) {
       SELECT
         oa.id,
         oa.user_id,
-        u.name AS user_name,
+        COALESCE(u.name, 'Akun dihapus') AS user_name,
         oa.assigned_at,
         oa.released_at,
         oa.release_reason
       FROM order_assignments oa
-      JOIN users u
+      LEFT JOIN users u
         ON u.id = oa.user_id
       WHERE oa.order_id = ?
       ORDER BY oa.assigned_at ASC
@@ -1398,7 +1398,7 @@ async function getOrderDetail(orderId) {
         oe.event_type,
         oe.actor_type,
         oe.actor_user_id,
-        actor.name AS actor_name,
+        CASE WHEN oe.actor_type = 'USER' AND actor.id IS NULL THEN 'Akun dihapus' ELSE actor.name END AS actor_name,
         oe.target_user_id,
         target.name AS target_name,
         oe.created_at
@@ -1419,12 +1419,12 @@ async function getOrderDetail(orderId) {
         n.id,
         n.event_id,
         n.user_id,
-        u.name AS user_name,
+        COALESCE(u.name, 'Akun dihapus') AS user_name,
         n.note_type,
         n.content,
         n.created_at
       FROM order_notes n
-      JOIN users u
+      LEFT JOIN users u
         ON u.id = n.user_id
       WHERE n.order_id = ?
       ORDER BY n.created_at ASC
@@ -1437,13 +1437,13 @@ async function getOrderDetail(orderId) {
       SELECT
         r.id,
         r.user_id,
-        u.name AS user_name,
+        COALESCE(u.name, 'Akun dihapus') AS user_name,
         r.content,
         r.telegram_chat_id,
         r.telegram_message_id,
         r.created_at
       FROM order_results r
-      JOIN users u
+      LEFT JOIN users u
         ON u.id = r.user_id
       WHERE r.order_id = ?
       ORDER BY r.created_at ASC
