@@ -1,6 +1,8 @@
 import {
   useEffect,
+  useRef,
   useState,
+  type ReactNode,
 } from "react"
 import { MessageSquare } from "lucide-react"
 import { io } from "socket.io-client"
@@ -48,9 +50,13 @@ function formatDateTime(value: string) {
   }).format(new Date(value))
 }
 
-export default function OrdersPage({ room, onLeaveRoom }: {
-  room: { id: number; name: string; context: string }
-  onLeaveRoom: () => void
+export default function OrdersPage({ room, onLeaveRoom, controls, picker, monitoredGroups, monitorEmptyMessage }: {
+  room?: { id: number; name: string; context: string }
+  onLeaveRoom?: () => void
+  controls: ReactNode
+  picker?: ReactNode
+  monitoredGroups?: { id: number; name: string }[]
+  monitorEmptyMessage?: string
 }) {
   const { token, user } = useAuth()
   const navigate = useNavigate()
@@ -63,6 +69,8 @@ export default function OrdersPage({ room, onLeaveRoom }: {
 
   const [error, setError] =
     useState("")
+
+  const [loadError, setLoadError] = useState("")
 
   const [successMessage, setSuccessMessage] = useState("")
 
@@ -83,35 +91,38 @@ export default function OrdersPage({ room, onLeaveRoom }: {
   const [quickCompleteFiles, setQuickCompleteFiles] = useState<File[]>([])
   const [quickCompleteError, setQuickCompleteError] = useState("")
   const [quickActionLoading, setQuickActionLoading] = useState(false)
+  const requestVersion = useRef(0)
+  const scope = room ? String(room.id) : monitoredGroups?.map((group) => group.id).join(",")
 
   async function loadOrders() {
-    if (!token) return
+    if (!token || !scope) return
+    const version = ++requestVersion.current
 
     try {
-      setLoading(true)
-      setError("")
+      setLoadError("")
 
-      const data = await getOrders(token, { groupId: String(room.id) })
-
-      setOrders(data)
+      const data = await getOrders(token, room ? { groupId: scope } : { groupIds: scope.split(",").map(Number) })
+      if (version === requestVersion.current) setOrders(data)
 
     } catch (error) {
+      if (version !== requestVersion.current) return
+      setOrders([])
       if (error instanceof Error) {
-        setError(error.message)
+        setLoadError(error.message)
       } else {
-        setError("Gagal mengambil order")
+        setLoadError("Gagal mengambil order")
       }
     } finally {
-      setLoading(false)
+      if (version === requestVersion.current) setLoading(false)
     }
   }
 
   useEffect(() => {
     loadOrders()
-  }, [token, room.id])
+  }, [token, scope])
 
   useEffect(() => {
-    if (!token) return
+    if (!token || !scope) return
 
     const socket = io(API_BASE_URL, { auth: { token } })
     const refreshOrders = () => loadOrders()
@@ -121,7 +132,7 @@ export default function OrdersPage({ room, onLeaveRoom }: {
     return () => {
       socket.disconnect()
     }
-  }, [token, room.id])
+  }, [token, scope])
 
   async function handleClaim(order: Order) {
     if (!token) return
@@ -245,17 +256,16 @@ export default function OrdersPage({ room, onLeaveRoom }: {
   }
 
   const visibleOrders = orders.filter((order) => order.status !== "DONE")
+  const countsByGroup = new Map<number, number>()
+  if (monitoredGroups) {
+    for (const order of visibleOrders) {
+      const groupId = Number(order.telegram_group_id)
+      countsByGroup.set(groupId, (countsByGroup.get(groupId) ?? 0) + 1)
+    }
+  }
   const canQuickAction = (order: Order) => user?.role === "HD"
     && order.performance_owner_id === user.id
     && (order.status === "IN_PROGRESS" || order.status === "ESCALATED")
-
-  if (loading) {
-    return (
-      <div className="p-6">
-        Memuat order...
-      </div>
-    )
-  }
 
   return (
     <div className="min-h-screen bg-muted p-6">
@@ -263,19 +273,23 @@ export default function OrdersPage({ room, onLeaveRoom }: {
 
         <div className="sticky top-0 z-20 -mx-6 border-b bg-muted/95 px-6 py-3 backdrop-blur supports-[backdrop-filter]:bg-muted/75">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h1 className="text-3xl font-semibold">Orders · {room.name}</h1>
-              <p className="text-muted-foreground">{room.context}</p>
+            <div className="min-w-0">
+              <h1 className="text-3xl font-semibold wrap-anywhere">Orders · {room?.name ?? "Pantau grup"}</h1>
+              <p className="text-muted-foreground">{room?.context ?? "Lihat antrean order dari beberapa grup sekaligus."}</p>
             </div>
-            <Button variant="outline" onClick={onLeaveRoom}>Keluar ruang</Button>
+            <div className="flex flex-wrap gap-2">
+              {controls}
+              {onLeaveRoom && <Button variant="outline" onClick={onLeaveRoom}>Keluar ruang</Button>}
+            </div>
           </div>
         </div>
 
         {error && (
-          <p className="text-destructive">
+          <p role="alert" className="text-destructive">
             {error}
           </p>
         )}
+        {loadError && <p role="alert" className="text-destructive">{loadError}</p>}
 
         {successMessage && (
           <p className="rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-400">
@@ -283,7 +297,11 @@ export default function OrdersPage({ room, onLeaveRoom }: {
           </p>
         )}
 
-        <Card>
+        {picker}
+        {!scope && <p className="text-sm text-muted-foreground">{monitorEmptyMessage}</p>}
+        {scope && loading && <p role="status" className="text-sm text-muted-foreground">Memuat order…</p>}
+
+        {scope && !loading && <Card>
           <CardHeader>
             <CardTitle>
               Order List
@@ -291,7 +309,14 @@ export default function OrdersPage({ room, onLeaveRoom }: {
           </CardHeader>
 
           <CardContent>
-            <p className="mb-3 text-sm text-muted-foreground" role="status">Menampilkan {visibleOrders.length} order aktif</p>
+            {!loadError && <p className="mb-3 text-sm text-muted-foreground" role="status">Menampilkan {visibleOrders.length} order aktif</p>}
+            {monitoredGroups && <ul aria-label="Grup dipantau" className="mb-3 flex flex-wrap gap-2">
+              {monitoredGroups.map((group) => (
+                <li key={group.id} className="rounded-md border bg-muted px-2.5 py-1 text-sm wrap-anywhere">
+                  {group.name}{!loadError && <span className="text-muted-foreground"> · {countsByGroup.get(group.id) ?? 0} order</span>}
+                </li>
+              ))}
+            </ul>}
             <div className="overflow-x-auto">
 
               <table className="w-full text-sm">
@@ -310,6 +335,8 @@ export default function OrdersPage({ room, onLeaveRoom }: {
                     <th className="p-3">
                       Service
                     </th>
+
+                    {monitoredGroups && <th scope="col" className="p-3">Grup asal</th>}
 
                     <th className="p-3">
                       Jenis Grup
@@ -363,6 +390,8 @@ export default function OrdersPage({ room, onLeaveRoom }: {
                         {order.service_number ||
                           "-"}
                       </td>
+
+                      {monitoredGroups && <td className="p-3">{order.telegram_group}</td>}
 
                       <td className="p-3">
                         {order.telegram_group_category === "LOGIC" ? "Logic" : "Pengawalan"}
@@ -420,7 +449,7 @@ export default function OrdersPage({ room, onLeaveRoom }: {
                           onClick={() =>
                             navigate(
                               `/orders/${order.id}`,
-                              { state: { roomId: room.id } },
+                              { state: { roomId: room?.id, monitoring: Boolean(monitoredGroups) } },
                             )
                           }
                         >
@@ -437,15 +466,15 @@ export default function OrdersPage({ room, onLeaveRoom }: {
                 </tbody>
               </table>
 
-              {visibleOrders.length === 0 && (
+              {!loadError && visibleOrders.length === 0 && (
                 <div className="py-8 text-center text-muted-foreground">
-                  Tidak ada order aktif di ruang ini
+                  {monitoredGroups ? "Tidak ada order aktif di grup yang dipilih." : "Tidak ada order aktif di ruang ini"}
                 </div>
               )}
 
             </div>
           </CardContent>
-        </Card>
+        </Card>}
 
       </div>
 

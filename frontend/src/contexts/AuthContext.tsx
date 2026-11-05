@@ -8,7 +8,7 @@ import {
 import { useNavigate } from "react-router-dom"
 import { clearTerminalRecovery, TERMINAL_LOGOUT_EVENT } from "@/lib/terminal-session"
 import { API_URL } from "@/config/api"
-import { clearActiveOrderRoom } from "@/lib/active-order-room"
+import { clearActiveOrderRoom, clearMonitoredOrderGroups } from "@/lib/active-order-room"
 
 type User = {
   id: number
@@ -70,6 +70,7 @@ export function AuthProvider({
     newUser: User,
   ) {
     clearActiveOrderRoom()
+    clearMonitoredOrderGroups()
     localStorage.setItem(
       "token",
       newToken,
@@ -86,6 +87,7 @@ export function AuthProvider({
 
   function logout() {
     clearActiveOrderRoom()
+    clearMonitoredOrderGroups()
     const closingToken = localStorage.getItem("token")
     window.dispatchEvent(new Event(TERMINAL_LOGOUT_EVENT))
     clearTerminalRecovery()

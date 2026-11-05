@@ -4,7 +4,10 @@ import { Navigate, useLocation, useNavigate, useSearchParams } from "react-route
 import { Button } from "@/components/ui/button"
 import { API_URL } from "@/config/api"
 import { useAuth } from "@/contexts/AuthContext"
-import { clearActiveOrderRoom, readActiveOrderRoom, rememberActiveOrderRoom } from "@/lib/active-order-room"
+import {
+  clearActiveOrderRoom, readActiveOrderRoom, readMonitoredOrderGroups,
+  rememberActiveOrderRoom, rememberMonitoredOrderGroups,
+} from "@/lib/active-order-room"
 import OrdersPage from "@/pages/OrdersPage"
 
 const workflows = { ASSURANCE: "Assurance", PROVISIONING: "Provisioning" } as const
@@ -15,6 +18,7 @@ type Room = { id: number; name: string; segment_id: number; workflow: Workflow; 
 type Catalog = { segments: Segment[]; rooms: Room[] }
 
 const segmentLabel = (code: string) => code === "REPLACE_ONT" ? "Replace ONT" : code
+const monitorPath = "/orders?pantau=1"
 
 function useRoomCatalog() {
   const { token } = useAuth()
@@ -48,6 +52,9 @@ function CatalogStatus({ error, retry }: { error: string; retry: () => void }) {
 export function RoomOrdersRoute() {
   const { user } = useAuth()
   const [params] = useSearchParams()
+  if (params.get("pantau") === "1") {
+    return <MonitoredOrders key={user?.id} />
+  }
   const roomId = params.get("room")
   if (roomId && /^\d+$/.test(roomId)) {
     return <RoomOrders key={`${user?.id}:${roomId}`} roomId={roomId} />
@@ -73,10 +80,93 @@ function RoomOrders({ roomId }: { roomId: string }) {
   if (!state.catalog) return <CatalogStatus {...state} />
   if (!room || !segment) return <Navigate to="/breakout-room" replace state={{ roomUnavailable: true }} />
   return <OrdersPage room={{ id: room.id, name: room.name, context: `${segmentLabel(segment.code)} / ${workflows[room.workflow]} / ${room.city_name}` }}
+    controls={<Button variant="outline" onClick={() => navigate(monitorPath)}>Pantau grup</Button>}
     onLeaveRoom={() => {
       clearActiveOrderRoom()
       navigate("/breakout-room", { replace: true })
     }} />
+}
+
+function MonitoredOrders() {
+  const state = useRoomCatalog()
+  const { user } = useAuth()
+  if (!state.catalog) return <CatalogStatus {...state} />
+  if (!user) return <Navigate to="/login" replace />
+  return <MonitorCatalog catalog={state.catalog} userId={user.id} />
+}
+
+function MonitorCatalog({ catalog, userId }: { catalog: Catalog; userId: number }) {
+  const navigate = useNavigate()
+  const activeRoom = readActiveOrderRoom(userId)
+  const [selected, setSelected] = useState(() => {
+    const saved = readMonitoredOrderGroups(userId)
+    return catalog.rooms.filter((room) => saved.includes(Number(room.id))).map((room) => Number(room.id))
+  })
+  const [draft, setDraft] = useState<number[] | null>(() => selected.length ? null :
+    catalog.rooms.filter((room) => String(room.id) === activeRoom).map((room) => Number(room.id)))
+  const pickerHeading = useRef<HTMLHeadingElement>(null)
+  const pickerButton = useRef<HTMLButtonElement>(null)
+  const picking = draft !== null
+  useEffect(() => {
+    if (picking) pickerHeading.current?.focus()
+    else pickerButton.current?.focus()
+  }, [picking])
+
+  const controls = (
+    <div className="flex flex-wrap gap-2">
+      <Button variant="outline" onClick={() => navigate("/orders")}>{activeRoom ? "Ruang aktif" : "Pilih ruang"}</Button>
+      <Button ref={pickerButton} variant="outline" aria-expanded={picking} aria-controls={picking ? "monitor-group-picker" : undefined}
+        disabled={!catalog.rooms.length} onClick={() => setDraft(picking ? null : selected)}>
+        Pilih grup{selected.length > 0 && ` (${selected.length})`}
+      </Button>
+    </div>
+  )
+
+  const picker = draft && catalog.rooms.length > 0 && (
+    <section id="monitor-group-picker" aria-labelledby="monitor-group-heading" className="space-y-4 rounded-xl border bg-card p-4 sm:p-6">
+      <h2 ref={pickerHeading} tabIndex={-1} id="monitor-group-heading" className="text-lg font-semibold">
+        Pilih grup yang ingin dipantau
+      </h2>
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {catalog.rooms.map((room) => {
+          const id = Number(room.id)
+          const segment = catalog.segments.find((item) => Number(item.id) === Number(room.segment_id))
+          const context = [segment && segmentLabel(segment.code), workflows[room.workflow], groupCategories[room.category], room.city_name]
+            .filter(Boolean).join(" · ")
+          return (
+            <label key={id} className="flex min-w-0 items-start gap-3 rounded-lg border px-3 py-2.5 text-sm hover:bg-muted has-checked:border-primary/50 has-checked:bg-primary/5">
+              <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-primary" checked={draft.includes(id)}
+                onChange={(event) => setDraft(event.target.checked ? [...draft, id] : draft.filter((item) => item !== id))} />
+              <span className="min-w-0 wrap-anywhere">
+                <span className="block font-medium">{room.name}</span>
+                <span className="block text-xs text-muted-foreground">{context}</span>
+              </span>
+            </label>
+          )
+        })}
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Button variant="outline" disabled={draft.length === catalog.rooms.length}
+          onClick={() => setDraft(catalog.rooms.map((room) => Number(room.id)))}>Pilih semua</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="ghost" onClick={() => selected.length ? setDraft(null) : navigate("/orders")}>Batal</Button>
+          <Button disabled={!draft.length} onClick={() => {
+            setSelected(draft)
+            rememberMonitoredOrderGroups(userId, draft)
+            setDraft(null)
+          }}>
+            {draft.length ? `Tampilkan ${draft.length} grup` : "Pilih minimal satu grup"}
+          </Button>
+        </div>
+      </div>
+    </section>
+  )
+
+  return <OrdersPage key={selected.join(",")} controls={controls} picker={picker}
+    monitoredGroups={catalog.rooms.filter((room) => selected.includes(Number(room.id))).map((room) => ({
+      id: Number(room.id), name: room.name,
+    }))}
+    monitorEmptyMessage={catalog.rooms.length ? "Pilih grup untuk melihat antrean order." : "Belum ada grup aktif yang dapat Anda akses."} />
 }
 
 export default function BreakoutRoomPage() {
@@ -115,6 +205,7 @@ export default function BreakoutRoomPage() {
       <header className="space-y-1">
         <h1 className="text-3xl font-semibold">Breakout Room</h1>
         <p className="text-muted-foreground">Pilih antrean order yang ingin Anda tangani.</p>
+        <Button variant="outline" className="mt-2" onClick={() => navigate(monitorPath)}>Pantau grup</Button>
       </header>
       {roomUnavailable && <p role="status" className="text-sm text-muted-foreground">Ruang sebelumnya tidak tersedia. Pilih ruang lain.</p>}
       {!state.catalog ? <CatalogStatus {...state} /> : (

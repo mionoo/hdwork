@@ -3,7 +3,7 @@
 const pool = require("../config/database");
 
 async function getAllOrders(filters = {}) {
-  const { status, city_id, segment_id, user_id, allowed_segment_ids, telegram_group_id } = filters;
+  const { status, city_id, segment_id, user_id, allowed_segment_ids, telegram_group_id, telegram_group_ids } = filters;
 
   // HD tidak punya segment sama sekali
   // jangan tampilkan order apa pun
@@ -63,9 +63,12 @@ async function getAllOrders(filters = {}) {
 
   const params = [];
 
-  if (telegram_group_id) {
-    sql += ` AND tg.id = ? AND tg.is_active = 1 AND tg.archived_at IS NULL AND tg.workflow IS NOT NULL`;
-    params.push(telegram_group_id);
+  const groupIds = telegram_group_ids ?? (telegram_group_id ? [telegram_group_id] : null);
+  if (groupIds) {
+    if (!groupIds.length) return [];
+    const placeholders = groupIds.map(() => "?").join(",");
+    sql += ` AND tg.id IN (${placeholders}) AND tg.is_active = 1 AND tg.archived_at IS NULL AND tg.workflow IS NOT NULL`;
+    params.push(...groupIds);
   }
 
   if (status) {

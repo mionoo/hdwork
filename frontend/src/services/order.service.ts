@@ -53,6 +53,7 @@ export async function getOrders(
     cityId?: string
     segmentId?: string
     groupId?: string
+    groupIds?: number[]
   } = {},
 ): Promise<Order[]> {
   const query = new URLSearchParams()
@@ -60,6 +61,7 @@ export async function getOrders(
   if (filters.cityId) query.set("city_id", filters.cityId)
   if (filters.segmentId) query.set("segment_id", filters.segmentId)
   if (filters.groupId) query.set("telegram_group_id", filters.groupId)
+  if (filters.groupIds?.length) query.set("telegram_group_ids", filters.groupIds.join(","))
 
   const queryString = query.toString()
 
@@ -76,9 +78,9 @@ export async function getOrders(
     await response.json()
 
   if (!response.ok) {
-    throw new Error(
-      "Gagal mengambil data order",
-    )
+    throw new Error(response.status === 403 && filters.groupIds
+      ? "Akses grup berubah. Muat ulang halaman untuk memperbarui pilihan."
+      : "Gagal mengambil data order")
   }
 
   return result.data

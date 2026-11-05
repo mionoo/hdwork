@@ -42,7 +42,7 @@ export default function OrderDetailPage() {
   const { token, user } = useAuth();
   const { id } = useParams();
   const navigate = useNavigate();
-  const roomId = useLocation().state?.roomId;
+  const { roomId, monitoring } = useLocation().state ?? {};
 
   const [detail, setDetail] = useState<OrderDetail | null>(null);
 
@@ -451,7 +451,7 @@ export default function OrderDetailPage() {
             </Button>
           )}
 
-          <Button variant="outline" onClick={() => navigate(roomId ? `/orders?room=${roomId}` : "/orders")}>
+          <Button variant="outline" onClick={() => navigate(monitoring ? "/orders?pantau=1" : roomId ? `/orders?room=${roomId}` : "/orders")}>
             Kembali
           </Button>
         </div>

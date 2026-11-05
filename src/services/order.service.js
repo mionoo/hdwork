@@ -7,17 +7,24 @@ async function getAllOrders(filters, currentUser) {
     ...filters,
   };
 
-  if (filters.telegram_group_id !== undefined) {
-    const groupId = Number(filters.telegram_group_id);
-    if (typeof filters.telegram_group_id !== "string" || !/^\d+$/.test(filters.telegram_group_id)
-      || !Number.isSafeInteger(groupId) || groupId < 1) {
+  const multipleGroups = filters.telegram_group_ids !== undefined;
+  if (multipleGroups || filters.telegram_group_id !== undefined) {
+    const groupFilter = multipleGroups ? filters.telegram_group_ids : filters.telegram_group_id;
+    const pattern = multipleGroups ? /^\d+(,\d+)*$/ : /^\d+$/;
+    const groupIds = typeof groupFilter === "string" && pattern.test(groupFilter)
+      ? [...new Set(groupFilter.split(",").map(Number))]
+      : [];
+    if (!groupIds.length || groupIds.some((id) => !Number.isSafeInteger(id) || id < 1)
+      || (multipleGroups && filters.telegram_group_id !== undefined)) {
       throw Object.assign(new Error("ID ruang tidak valid"), { statusCode: 400 });
     }
     const { rooms } = await breakoutRepository.list(currentUser.id);
-    if (!rooms.some((room) => Number(room.id) === groupId)) {
+    const accessibleIds = new Set(rooms.map((room) => Number(room.id)));
+    if (groupIds.some((id) => !accessibleIds.has(id))) {
       throw Object.assign(new Error("Ruang tidak tersedia atau tidak dapat diakses"), { statusCode: 403 });
     }
-    scopedFilters.telegram_group_id = groupId;
+    if (multipleGroups) scopedFilters.telegram_group_ids = groupIds;
+    else scopedFilters.telegram_group_id = groupIds[0];
   }
 
   if (currentUser.role === "HD") {

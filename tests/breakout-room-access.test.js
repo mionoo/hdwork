@@ -49,3 +49,38 @@ test("room list validates group IDs and refuses inaccessible rooms before queryi
   assert.equal(seen[0].city_id, 4);
   assert.deepEqual(seen[0].allowed_segment_ids, [2]);
 });
+
+test("multi-room orders require access to every selected group", async () => {
+  const seen = [];
+  const service = load("src/services/order.service.js", {
+    "../repositories/breakout.repository": { list: async () => ({ rooms: [{ id: 12 }, { id: "14" }] }) },
+    "../repositories/order.repository": {
+      getUserSegmentIds: async () => [2],
+      getAllOrders: async (filters) => { seen.push(filters); return []; },
+    },
+  });
+  const user = { id: 18, role: "HD", city_id: 4 };
+
+  for (const filter of ["", "12,", "0", "12,9007199254740992", ["12", "14"]]) {
+    await assert.rejects(service.getAllOrders({ telegram_group_ids: filter }, user), { statusCode: 400 });
+  }
+  await assert.rejects(service.getAllOrders({ telegram_group_id: "12", telegram_group_ids: "14" }, user), { statusCode: 400 });
+  await assert.rejects(service.getAllOrders({ telegram_group_ids: "12,13" }, user), { statusCode: 403 });
+  assert.equal(seen.length, 0);
+
+  await service.getAllOrders({ telegram_group_ids: "12,14,12", city_id: 9 }, user);
+  assert.equal(JSON.stringify(seen[0].telegram_group_ids), "[12,14]");
+  assert.equal(seen[0].city_id, 4);
+  assert.deepEqual(seen[0].allowed_segment_ids, [2]);
+});
+
+test("multi-room query binds group IDs and excludes unavailable groups", async () => {
+  const repo = load("src/repositories/order.repository.js", {
+    "../config/database": { query: async (sql, params) => {
+      assert.match(sql, /tg\.id IN \(\?,\?\) AND tg\.is_active = 1 AND tg\.archived_at IS NULL/);
+      assert.equal(JSON.stringify(params), "[12,14,4,2]");
+      return [[]];
+    } },
+  });
+  await repo.getAllOrders({ telegram_group_ids: [12, 14], city_id: 4, allowed_segment_ids: [2] });
+});

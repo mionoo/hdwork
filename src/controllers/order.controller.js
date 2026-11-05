@@ -26,6 +26,7 @@ async function getAllOrders(req, res) {
       segment_id,
       user_id,
       telegram_group_id,
+      telegram_group_ids,
     } = req.query;
 
     const currentUser = req.user;
@@ -36,6 +37,7 @@ async function getAllOrders(req, res) {
       segment_id,
       user_id,
       telegram_group_id,
+      telegram_group_ids,
     };
 
     const orders = await orderService.getAllOrders(

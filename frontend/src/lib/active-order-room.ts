@@ -1,4 +1,5 @@
 const storageKey = "hdwork:active-order-room"
+const monitoredKey = "hdwork:monitored-order-groups"
 
 export function readActiveOrderRoom(userId: number): string | null {
   try {
@@ -18,4 +19,24 @@ export function rememberActiveOrderRoom(userId: number, roomId: string) {
 export function clearActiveOrderRoom() {
   try { sessionStorage.removeItem(storageKey) }
   catch { /* No stored room to clear. */ }
+}
+
+export function readMonitoredOrderGroups(userId: number): number[] {
+  try {
+    const entry = JSON.parse(sessionStorage.getItem(monitoredKey) || "null")
+    if (entry?.userId === userId && Array.isArray(entry.groupIds)) {
+      return entry.groupIds.filter((id: unknown) => typeof id === "number" && Number.isSafeInteger(id) && id > 0)
+    }
+  } catch { /* Storage may be unavailable. */ }
+  return []
+}
+
+export function rememberMonitoredOrderGroups(userId: number, groupIds: number[]) {
+  try { sessionStorage.setItem(monitoredKey, JSON.stringify({ userId, groupIds })) }
+  catch { /* The current selection remains usable. */ }
+}
+
+export function clearMonitoredOrderGroups() {
+  try { sessionStorage.removeItem(monitoredKey) }
+  catch { /* No stored selection to clear. */ }
 }
