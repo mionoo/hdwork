@@ -54,14 +54,21 @@ function cityKeyboard(cities) {
 
 function segmentKeyboard(cityId, segments) {
   return Markup.inlineKeyboard(segments.map((segment) => [
-    Markup.button.callback(segment.code, `setgroup:segment:${cityId}:${segment.id}`),
+    Markup.button.callback(segment.code === "REPLACE_ONT" ? "Replace ONT" : segment.code, `setgroup:segment:${cityId}:${segment.id}`),
   ]));
 }
 
-function categoryKeyboard(cityId, segmentId) {
+function workflowKeyboard(cityId, segmentId) {
   return Markup.inlineKeyboard([[
-    Markup.button.callback("Pengawalan", `setgroup:category:${cityId}:${segmentId}:PENGAWALAN`),
-    Markup.button.callback("Logic", `setgroup:category:${cityId}:${segmentId}:LOGIC`),
+    Markup.button.callback("Assurance", `setgroup:flow:${cityId}:${segmentId}:A`),
+    Markup.button.callback("Provisioning", `setgroup:flow:${cityId}:${segmentId}:P`),
+  ]]);
+}
+
+function categoryKeyboard(cityId, segmentId, workflowCode) {
+  return Markup.inlineKeyboard([[
+    Markup.button.callback("Pengawalan", `setgroup:type:${cityId}:${segmentId}:${workflowCode}:PENGAWALAN`),
+    Markup.button.callback("Logic", `setgroup:type:${cityId}:${segmentId}:${workflowCode}:LOGIC`),
   ]]);
 }
 
@@ -228,7 +235,7 @@ async function ensureAdmin(ctx) {
 async function handleSetGroup(ctx) {
   if (!(await ensureAdmin(ctx))) return;
   const cities = await telegramRepository.getCities();
-  await ctx.reply("Konfigurasi grup order\n\n1/3 — Pilih kota:", {
+  await ctx.reply("Konfigurasi grup order\n\n1/4 — Pilih kota:", {
     ...threadOptions(ctx.message),
     ...cityKeyboard(cities),
   });
@@ -332,15 +339,15 @@ async function ensureCallbackAdmin(ctx) {
   return false;
 }
 
-async function configureGroup(ctx, cityId, segmentId, category) {
+async function configureGroup(ctx, cityId, segmentId, category, workflow) {
   const message = ctx.callbackQuery.message;
   const threadId = getThreadId(message);
-  await telegramRepository.saveGroup({ chatId: message.chat.id, threadId, name: groupName(message.chat, threadId), cityId, segmentId, category });
+  await telegramRepository.saveGroup({ chatId: message.chat.id, threadId, name: groupName(message.chat, threadId), cityId, segmentId, category, workflow });
   const cities = await telegramRepository.getCities();
   const segments = await telegramRepository.getSegments();
   const city = cities.find((item) => Number(item.id) === Number(cityId));
   const segment = segments.find((item) => Number(item.id) === Number(segmentId));
-  await ctx.editMessageText(["✅ Grup berhasil dikonfigurasi", `Kota: ${city?.name || cityId}`, `Segmen: ${segment?.code || segmentId}`, `Jenis: ${category === "PENGAWALAN" ? "Pengawalan" : "Logic"}`, "Atur alur kerja di Konfigurasi Grup HD Work agar grup muncul di Breakout Room."].join("\n"));
+  await ctx.editMessageText(["✅ Grup berhasil dikonfigurasi", `Kota: ${city?.name || cityId}`, `Segmen: ${segment?.code === "REPLACE_ONT" ? "Replace ONT" : segment?.code || segmentId}`, `Alur kerja: ${workflow === "ASSURANCE" ? "Assurance" : "Provisioning"}`, `Jenis: ${category === "PENGAWALAN" ? "Pengawalan" : "Logic"}`, `Grup: ${groupName(message.chat, threadId)}`].join("\n"));
 }
 
 function registerHandlers() {
@@ -353,9 +360,21 @@ function registerHandlers() {
   bot.command("alarmstatus", async (ctx) => { try { await handleAlarmStatus(ctx); } catch (error) { console.error("/alarmstatus gagal:", error.message); await ctx.reply(`⚠️ ${error.message}`); } });
   bot.command("config", async (ctx) => { try { await ingestConfigOrder(ctx); } catch (error) { console.error("Order config Telegram gagal diproses:", error.message); } });
   bot.on("text", async (ctx) => { try { await ingestIncomingOrder(ctx); } catch (error) { console.error("Order Telegram gagal diproses:", error.message); } });
-  bot.action(/^setgroup:city:(\d+)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; const segments = await telegramRepository.getSegments(); await ctx.editMessageText("Konfigurasi grup order\n\n2/3 — Pilih segmen:", segmentKeyboard(ctx.match[1], segments)); await ctx.answerCbQuery(); });
-  bot.action(/^setgroup:segment:(\d+):(\d+)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await ctx.editMessageText("Konfigurasi grup order\n\n3/3 — Pilih jenis grup:", categoryKeyboard(ctx.match[1], ctx.match[2])); await ctx.answerCbQuery(); });
-  bot.action(/^setgroup:category:(\d+):(\d+):(PENGAWALAN|LOGIC)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await configureGroup(ctx, ctx.match[1], ctx.match[2], ctx.match[3]); await ctx.answerCbQuery(); });
+  bot.action(/^setgroup:city:(\d+)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; const segments = await telegramRepository.getSegments(); await ctx.editMessageText("Konfigurasi grup order\n\n2/4 — Pilih segmen:", segmentKeyboard(ctx.match[1], segments)); await ctx.answerCbQuery(); });
+  bot.action(/^setgroup:segment:(\d+):(\d+)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await ctx.editMessageText("Konfigurasi grup order\n\n3/4 — Pilih alur kerja:", workflowKeyboard(ctx.match[1], ctx.match[2])); await ctx.answerCbQuery(); });
+  bot.action(/^setgroup:flow:(\d+):(\d+):([AP])$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await ctx.editMessageText("Konfigurasi grup order\n\n4/4 — Pilih jenis grup:", categoryKeyboard(ctx.match[1], ctx.match[2], ctx.match[3])); await ctx.answerCbQuery(); });
+  bot.action(/^setgroup:type:(\d+):(\d+):([AP]):(PENGAWALAN|LOGIC)$/, async (ctx) => {
+    if (!(await ensureCallbackAdmin(ctx))) return;
+    try {
+      await configureGroup(ctx, ctx.match[1], ctx.match[2], ctx.match[4], ctx.match[3] === "A" ? "ASSURANCE" : "PROVISIONING");
+      await ctx.answerCbQuery();
+    } catch (error) {
+      console.error("Konfigurasi grup Telegram gagal:", error.message);
+      await ctx.answerCbQuery("Gagal menyimpan konfigurasi. Periksa pengaturan grup dan coba lagi.", { show_alert: true });
+    }
+  });
+  // Old inline keyboards cannot save a group without a workflow.
+  bot.action(/^setgroup:category:(\d+):(\d+):(PENGAWALAN|LOGIC)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await ctx.editMessageText("Konfigurasi grup order\n\n3/4 — Pilih alur kerja:", workflowKeyboard(ctx.match[1], ctx.match[2])); await ctx.answerCbQuery(); });
   bot.action("setgroup:cancel", async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await ctx.editMessageText("Konfigurasi grup dibatalkan."); await ctx.answerCbQuery(); });
   bot.action(/^alarmdatin:page:(\d+)$/, async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; await renderDatinInstitutionChoices(ctx, Number(ctx.match[1]), true); await ctx.answerCbQuery(); } catch (error) { console.error("Halaman /alarmdatin gagal:", error.message); await ctx.answerCbQuery("Gagal memuat pilihan.", { show_alert: true }); } });
   bot.action(/^alarmdatin:toggle:(\d+):(\d+)$/, async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; const selected = await telegramRepository.toggleDatinSubscription(ctx.from.id, Number(ctx.match[1])); await renderDatinInstitutionChoices(ctx, Number(ctx.match[2]), true); await ctx.answerCbQuery(selected === null ? "Daftar instansi berubah. Pilih dari daftar terbaru." : undefined); } catch (error) { console.error("Pilihan /alarmdatin gagal:", error.message); await ctx.answerCbQuery("Gagal menyimpan pilihan.", { show_alert: true }); } });

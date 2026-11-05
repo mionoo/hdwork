@@ -24,9 +24,10 @@ mengembalikan pengguna ke pilihan segmen tanpa logout dan tanpa melepas order.
 
 ## Mendaftarkan grup atau topik baru
 
-Jalankan `/setgrup` di grup atau topik Telegram tujuan. Pilih kota, segmen, dan
-jenis grup seperti biasa, kemudian tetapkan alur kerja melalui **Konfigurasi
-Grup**. Pendaftaran grup baru tidak menggantikan grup lain yang punya jenis
+Jalankan `/setgrup` di grup atau topik Telegram tujuan. Pilih **kota → segmen →
+alur kerja → jenis grup**. Setelah disimpan, grup langsung memiliki alur kerja
+untuk Breakout Room; koreksi tetap dapat dilakukan melalui **Konfigurasi Grup**.
+Pendaftaran grup baru tidak menggantikan grup lain yang punya jenis
 yang sama. Untuk Replace ONT, siapkan grup **Group Replace Assurance** dan
 **Group Prov Replacement** sesuai topologi yang disepakati.
 

@@ -48,7 +48,11 @@ async function saveGroup({
   cityId,
   segmentId,
   category,
+  workflow,
 }) {
+  if (!["ASSURANCE", "PROVISIONING"].includes(workflow)) {
+    throw Object.assign(new Error("Alur kerja wajib dipilih"), { statusCode: 400 });
+  }
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
@@ -61,12 +65,12 @@ async function saveGroup({
     }
     const [result] = existing
       ? await connection.query(
-        "UPDATE telegram_groups SET name=?, city_id=?, segment_id=?, category=?, is_active=1, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-        [name, cityId, segmentId, category, existing.id],
+        "UPDATE telegram_groups SET name=?, city_id=?, segment_id=?, category=?, workflow=?, is_active=1, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        [name, cityId, segmentId, category, workflow, existing.id],
       )
       : await connection.query(
-        "INSERT INTO telegram_groups (telegram_chat_id, telegram_thread_id, name, city_id, segment_id, category, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)",
-        [chatId, threadId, name, cityId, segmentId, category],
+        "INSERT INTO telegram_groups (telegram_chat_id, telegram_thread_id, name, city_id, segment_id, category, workflow, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
+        [chatId, threadId, name, cityId, segmentId, category, workflow],
       );
     await connection.commit();
     return result;
