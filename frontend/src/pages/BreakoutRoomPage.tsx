@@ -7,9 +7,10 @@ import { useAuth } from "@/contexts/AuthContext"
 import OrdersPage from "@/pages/OrdersPage"
 
 const workflows = { ASSURANCE: "Assurance", PROVISIONING: "Provisioning" } as const
+const groupCategories = { PENGAWALAN: "Pengawalan", LOGIC: "Logic" } as const
 type Workflow = keyof typeof workflows
 type Segment = { id: number; code: string }
-type Room = { id: number; name: string; segment_id: number; workflow: Workflow; city_name: string }
+type Room = { id: number; name: string; segment_id: number; workflow: Workflow; category: keyof typeof groupCategories; city_name: string }
 type Catalog = { segments: Segment[]; rooms: Room[] }
 
 const segmentLabel = (code: string) => code === "REPLACE_ONT" ? "Replace ONT" : code
@@ -82,7 +83,8 @@ export default function BreakoutRoomPage() {
       : rooms.map((room) => ({
           id: room.id,
           label: room.name,
-          detail: user?.role === "SUPER_ADMIN" ? room.city_name : undefined,
+          detail: [groupCategories[room.category], user?.role === "SUPER_ADMIN" ? room.city_name : undefined]
+            .filter(Boolean).join(" · "),
           choose: () => navigate(`/orders?room=${room.id}`, { replace: true }),
         }))
 
@@ -121,7 +123,7 @@ export default function BreakoutRoomPage() {
                 <Button key={id} variant="outline" onClick={choose}
                   className="h-auto min-h-16 justify-between gap-3 whitespace-normal px-4 py-3 text-left">
                   <span className="min-w-0 wrap-anywhere">{label}
-                    {detail && <span className="block text-xs text-muted-foreground">{detail}</span>}
+                    {detail && <span className="mt-1 block text-xs text-muted-foreground">{detail}</span>}
                   </span>
                   <ChevronRight aria-hidden="true" />
                 </Button>
