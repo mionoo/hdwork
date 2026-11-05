@@ -93,8 +93,7 @@ async function createUser(actorId, payload) {
   const role = payload.role || "HD";
   const cityId = payload.city_id || actor.city_id;
   validateScope(actor, { ...payload, role, city_id: cityId });
-  if (!payload.name || !payload.username || !payload.password) { const error = new Error("Nama, username, dan password wajib diisi"); error.statusCode = 400; throw error; }
-  if (payload.password.length < 8) { const error = new Error("Password minimal 8 karakter"); error.statusCode = 400; throw error; }
+  if (!payload.name || !payload.username || typeof payload.password !== "string" || !payload.password.length) { const error = new Error("Nama, username, dan password wajib diisi"); error.statusCode = 400; throw error; }
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
