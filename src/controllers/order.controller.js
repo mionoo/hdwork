@@ -330,9 +330,12 @@ async function completeOrder(req, res) {
     });
     let resultDelivery = null;
     if (result.telegram.result) {
+      const content = result.telegram.result.content?.trim();
+      const completedBy = result.telegram.user_name?.trim();
       resultDelivery = await telegramService.notifyOrderResult({
         ...result.telegram,
         ...result.telegram.result,
+        content: [content, completedBy && `oleh ${completedBy}`].filter(Boolean).join("\n\n"),
       });
       if (resultDelivery.message_id) {
         try {

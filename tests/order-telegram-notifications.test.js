@@ -65,6 +65,26 @@ test("file-only results add no automatic caption", async () => {
   assert.equal(calls[0].args[2].caption, undefined);
 });
 
+test("complete with only a photo uses the completing HD's name as its only caption", async () => {
+  const { service, calls } = telegram();
+  const controller = load("../src/controllers/order.controller.js", {
+    "../services/order.service": {
+      completeOrder: async () => ({ telegram: {
+        ...notification, user_name: "HD Penyelesai",
+        result: { result_id: 3, content: null, files: [photo] },
+      } }),
+      markResultTelegramDelivery: async () => {},
+    },
+    "../services/telegram.service": service,
+    "../services/realtime.service": { emitOrdersChanged() {} },
+  });
+  const res = { status(code) { assert.equal(code, 200); return this; }, json(body) { assert.equal(body.success, true); } };
+  await controller.completeOrder({ params: { id: 1 }, user: { id: 2, username: "login-hd" }, body: {}, files: [] }, res);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "sendPhoto");
+  assert.equal(calls[0].args[2].caption, "oleh HD Penyelesai");
+});
+
 test("long user content is preserved as text rather than an oversized caption", async () => {
   const { service, calls } = telegram();
   const content = "a".repeat(1025);
@@ -92,7 +112,11 @@ for (const hasResult of [true, false]) {
         markResultTelegramDelivery: async () => {},
       },
       "../services/telegram.service": {
-        notifyOrderResult: async () => { resultCalls++; return { delivered: true, message_id: 8 }; },
+        notifyOrderResult: async (payload) => {
+          resultCalls++;
+          assert.equal(payload.content, "done\n\noleh Fajar");
+          return { delivered: true, message_id: 8 };
+        },
         notifyOrderCompleted: async () => { assert.fail("must not send status message"); },
       },
       "../services/realtime.service": { emitOrdersChanged() {} },
