@@ -48,7 +48,10 @@ function formatDateTime(value: string) {
   }).format(new Date(value))
 }
 
-export default function OrdersPage({ room }: { room: { id: number; name: string; context: string } }) {
+export default function OrdersPage({ room, onLeaveRoom }: {
+  room: { id: number; name: string; context: string }
+  onLeaveRoom: () => void
+}) {
   const { token, user } = useAuth()
   const navigate = useNavigate()
 
@@ -264,7 +267,7 @@ export default function OrdersPage({ room }: { room: { id: number; name: string;
               <h1 className="text-3xl font-semibold">Orders · {room.name}</h1>
               <p className="text-muted-foreground">{room.context}</p>
             </div>
-            <Button variant="outline" onClick={() => navigate("/breakout-room", { replace: true })}>Keluar ruang</Button>
+            <Button variant="outline" onClick={onLeaveRoom}>Keluar ruang</Button>
           </div>
         </div>
 

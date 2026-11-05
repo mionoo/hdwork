@@ -451,7 +451,7 @@ export default function OrderDetailPage() {
             </Button>
           )}
 
-          <Button variant="outline" onClick={() => navigate(roomId ? `/orders?room=${roomId}` : "/breakout-room")}>
+          <Button variant="outline" onClick={() => navigate(roomId ? `/orders?room=${roomId}` : "/orders")}>
             Kembali
           </Button>
         </div>

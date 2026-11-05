@@ -4,6 +4,7 @@ import { Navigate, useLocation, useNavigate, useSearchParams } from "react-route
 import { Button } from "@/components/ui/button"
 import { API_URL } from "@/config/api"
 import { useAuth } from "@/contexts/AuthContext"
+import { clearActiveOrderRoom, readActiveOrderRoom, rememberActiveOrderRoom } from "@/lib/active-order-room"
 import OrdersPage from "@/pages/OrdersPage"
 
 const workflows = { ASSURANCE: "Assurance", PROVISIONING: "Provisioning" } as const
@@ -45,20 +46,37 @@ function CatalogStatus({ error, retry }: { error: string; retry: () => void }) {
 }
 
 export function RoomOrdersRoute() {
+  const { user } = useAuth()
   const [params] = useSearchParams()
   const roomId = params.get("room")
-  return roomId && /^\d+$/.test(roomId)
-    ? <RoomOrders key={roomId} roomId={roomId} />
-    : <Navigate to="/breakout-room" replace />
+  if (roomId && /^\d+$/.test(roomId)) {
+    return <RoomOrders key={`${user?.id}:${roomId}`} roomId={roomId} />
+  }
+  const remembered = roomId === null && user ? readActiveOrderRoom(user.id) : null
+  return <Navigate to={remembered ? `/orders?room=${remembered}` : "/breakout-room"} replace />
 }
 
 function RoomOrders({ roomId }: { roomId: string }) {
   const state = useRoomCatalog()
+  const { user } = useAuth()
+  const navigate = useNavigate()
+  const room = state.catalog?.rooms.find((item) => String(item.id) === roomId)
+  const segment = state.catalog?.segments.find((item) => Number(item.id) === Number(room?.segment_id))
+  const verified = Boolean(room && segment)
+  const catalogLoaded = Boolean(state.catalog)
+  const userId = user?.id
+  useEffect(() => {
+    if (!catalogLoaded || userId === undefined) return
+    if (verified) rememberActiveOrderRoom(userId, roomId)
+    else if (readActiveOrderRoom(userId) === roomId) clearActiveOrderRoom()
+  }, [catalogLoaded, roomId, userId, verified])
   if (!state.catalog) return <CatalogStatus {...state} />
-  const room = state.catalog.rooms.find((item) => String(item.id) === roomId)
-  const segment = state.catalog.segments.find((item) => Number(item.id) === Number(room?.segment_id))
   if (!room || !segment) return <Navigate to="/breakout-room" replace state={{ roomUnavailable: true }} />
-  return <OrdersPage room={{ id: room.id, name: room.name, context: `${segmentLabel(segment.code)} / ${workflows[room.workflow]} / ${room.city_name}` }} />
+  return <OrdersPage room={{ id: room.id, name: room.name, context: `${segmentLabel(segment.code)} / ${workflows[room.workflow]} / ${room.city_name}` }}
+    onLeaveRoom={() => {
+      clearActiveOrderRoom()
+      navigate("/breakout-room", { replace: true })
+    }} />
 }
 
 export default function BreakoutRoomPage() {
