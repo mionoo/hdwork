@@ -57,9 +57,12 @@ async function saveGroup({
   try {
     await connection.beginTransaction();
     const [[existing]] = await connection.query(
-      "SELECT id, category FROM telegram_groups WHERE telegram_chat_id = ? AND telegram_thread_id = ? FOR UPDATE",
+      "SELECT id, category, archived_at FROM telegram_groups WHERE telegram_chat_id = ? AND telegram_thread_id = ? FOR UPDATE",
       [chatId, threadId],
     );
+    if (existing?.archived_at) {
+      throw Object.assign(new Error("Grup berada di arsip. Pulihkan melalui Konfigurasi Grup."), { statusCode: 409 });
+    }
     if (existing && !["PENGAWALAN", "LOGIC"].includes(existing.category)) {
       throw Object.assign(new Error("Grup/topic ini sudah digunakan untuk alarm"), { statusCode: 409 });
     }
@@ -87,7 +90,7 @@ async function getGroupByChatThread(chatId, threadId) {
     `
     SELECT id, name, category, is_active
     FROM telegram_groups
-    WHERE telegram_chat_id = ? AND telegram_thread_id = ?
+    WHERE telegram_chat_id = ? AND telegram_thread_id = ? AND archived_at IS NULL
     LIMIT 1
     `,
     [chatId, threadId],

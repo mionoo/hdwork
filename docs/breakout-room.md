@@ -34,3 +34,17 @@ yang sama. Untuk Replace ONT, siapkan grup **Group Replace Assurance** dan
 HD dibatasi oleh kota dan segmen yang diberikan; Admin dibatasi oleh kota;
 Super Admin dapat memilih ruang lintas kota. Pilihan ruang tidak mengubah
 hak akses order, aturan claim, attendance, atau tujuan balasan Telegram.
+
+## Nonaktif dan arsip grup
+
+Sebelum menayangkan fitur arsip, terapkan
+`database/migrations/20261105_archive_telegram_groups.sql` satu kali. Restart
+backend setelah migrasi dan sebelum menayangkan build frontend baru.
+
+- **Nonaktif**: grup tetap tercantum di Konfigurasi Grup, tetapi tidak muncul
+  di Breakout Room dan tidak menerima order baru.
+- **Arsipkan** (Super Admin): grup dipindah dari daftar utama ke **Lihat arsip**.
+  Tidak ada grup, order, foto, atau riwayat yang dihapus. Grup yang diarsipkan
+  tidak dapat diaktifkan ulang melalui `/setgrup`.
+- **Pulihkan** (Super Admin): grup kembali ke daftar utama sebagai **Nonaktif**.
+  Aktifkan lewat Edit setelah siap menerima order lagi.

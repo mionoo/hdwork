@@ -64,7 +64,7 @@ async function getAllOrders(filters = {}) {
   const params = [];
 
   if (telegram_group_id) {
-    sql += ` AND tg.id = ? AND tg.is_active = 1 AND tg.workflow IS NOT NULL`;
+    sql += ` AND tg.id = ? AND tg.is_active = 1 AND tg.archived_at IS NULL AND tg.workflow IS NOT NULL`;
     params.push(telegram_group_id);
   }
 
@@ -368,6 +368,14 @@ async function createIncomingOrder({
 
   try {
     await connection.beginTransaction();
+    const [[currentGroup]] = await connection.query(
+      "SELECT id FROM telegram_groups WHERE id = ? AND is_active = 1 AND archived_at IS NULL FOR UPDATE",
+      [group.id],
+    );
+    if (!currentGroup) {
+      await connection.commit();
+      return null;
+    }
     if (message.media_group_id) {
       const [[existing]] = await connection.query(
         "SELECT id FROM orders WHERE telegram_chat_id = ? AND telegram_media_group_id = ? LIMIT 1",

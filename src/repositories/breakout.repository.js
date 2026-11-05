@@ -23,6 +23,7 @@ async function list(userId) {
      JOIN segments s ON s.id = tg.segment_id
      ${segmentAccess}
      ${segmentAccess ? "AND" : "WHERE"} tg.is_active = 1
+       AND tg.archived_at IS NULL
        AND tg.category IN ('PENGAWALAN', 'LOGIC')
        AND tg.workflow IS NOT NULL
        ${user.role === "SUPER_ADMIN" ? "" : "AND tg.city_id = ?"}
