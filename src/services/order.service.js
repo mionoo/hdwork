@@ -1,5 +1,6 @@
 const orderRepository = require("../repositories/order.repository");
 const breakoutRepository = require("../repositories/breakout.repository");
+const orderSourceRepository = require("../repositories/order-source.repository");
 
 async function getAllOrders(filters, currentUser) {
   const scopedFilters = {
@@ -62,7 +63,7 @@ async function getOrderById(id, currentUser) {
     throw error;
   }
 
-  return order;
+  return { ...order, source_photos: await orderSourceRepository.list(id) };
 }
 
 async function claimOrder(orderId, userId) {
@@ -181,6 +182,7 @@ async function getOrderDetail(
     throw error;
   }
 
+  result.order.source_photos = await orderSourceRepository.list(orderId);
   return result;
 }
 

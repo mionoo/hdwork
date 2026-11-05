@@ -16,6 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import OrderStatusBadge from "@/components/OrderStatusBadge";
 
 import { useAuth } from "@/contexts/AuthContext";
+import OrderSourcePhotos from "@/components/OrderSourcePhotos";
 
 import {
   completeOrder,
@@ -489,6 +490,7 @@ export default function OrderDetailPage() {
               <pre className="mt-2 max-h-44 overflow-auto rounded-lg border bg-muted p-3 font-mono text-sm leading-relaxed whitespace-pre-wrap break-words text-foreground">
                 {order.raw_message || order.description || "-"}
               </pre>
+              <OrderSourcePhotos orderId={order.id} photos={order.source_photos} token={token} />
             </div>
           </CardContent>
         </Card>

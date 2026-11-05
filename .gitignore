@@ -16,5 +16,6 @@ local_agent/.env
 
 # Generated files and macOS metadata
 .DS_Store
+storage/order-source/
 uploads/results/*
 !uploads/results/.gitkeep

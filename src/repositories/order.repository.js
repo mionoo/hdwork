@@ -368,6 +368,16 @@ async function createIncomingOrder({
 
   try {
     await connection.beginTransaction();
+    if (message.media_group_id) {
+      const [[existing]] = await connection.query(
+        "SELECT id FROM orders WHERE telegram_chat_id = ? AND telegram_media_group_id = ? LIMIT 1",
+        [message.chat.id, message.media_group_id],
+      );
+      if (existing) {
+        await connection.commit();
+        return null;
+      }
+    }
     const [types] = await connection.query(
       "SELECT id, point_value FROM order_types WHERE code = ? AND is_active = 1 LIMIT 1",
       [orderType],
@@ -383,15 +393,15 @@ async function createIncomingOrder({
         ticket_number, service_number, description, raw_message, metadata,
         old_ont_serial, new_ont_serial, sto, valin_id,
         telegram_chat_id, telegram_message_id, telegram_user_id, telegram_username,
-        telegram_group_id, order_type_id, point_value, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'WAITING')
+        telegram_group_id, order_type_id, point_value, telegram_media_group_id, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'WAITING')
       `,
       [
-        ticketNumber || null, serviceNumber || null, description, message.text,
+        ticketNumber || null, serviceNumber || null, description, message.text || message.caption || "",
         JSON.stringify(metadata || {}), oldOntSerial || null, newOntSerial || null,
         sto || null, valinId || null, message.chat.id, message.message_id,
         message.from?.id || null, message.from?.username || null, group.id,
-        types[0].id, types[0].point_value,
+        types[0].id, types[0].point_value, message.media_group_id || null,
       ],
     );
     await connection.commit();

@@ -38,6 +38,7 @@ export type OrderRawMessage = {
   id: number
   telegram_group: string
   raw_message: string | null
+  source_photos?: Array<{ id: number }>
 }
 
 type OrdersResponse = {
@@ -162,6 +163,7 @@ export type OrderDetail = {
     new_ont_serial?: string | null
     valin_id?: string | null
     raw_message?: string
+    source_photos?: Array<{ id: number }>
   }
 
   assignments: OrderAssignment[]

@@ -10,6 +10,7 @@ import { useNavigate } from "react-router-dom"
 
 import { Button } from "@/components/ui/button"
 import OrderStatusBadge from "@/components/OrderStatusBadge"
+import OrderSourcePhotos from "@/components/OrderSourcePhotos"
 import {
   Dialog,
   DialogContent,
@@ -462,13 +463,14 @@ export default function OrdersPage({ room }: { room: { id: number; name: string;
             </DialogDescription>
           </DialogHeader>
 
-          <div className="mt-5 flex-1">
+          <div className="mt-5 min-h-0 flex-1 overflow-y-auto">
             <p className="mb-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
               Raw message
             </p>
-            <pre className="max-h-[calc(100svh-11rem)] overflow-auto rounded-lg border bg-muted p-4 font-mono text-sm whitespace-pre-wrap break-words">
+            <pre className="max-h-60 overflow-auto rounded-lg border bg-muted p-4 font-mono text-sm whitespace-pre-wrap break-words">
               {selectedMessage?.raw_message || "Pesan asli tidak tersedia."}
             </pre>
+            {selectedMessage && <OrderSourcePhotos orderId={selectedMessage.id} photos={selectedMessage.source_photos} token={token} />}
           </div>
 
           {selectedOrder && canQuickAction(selectedOrder) && (

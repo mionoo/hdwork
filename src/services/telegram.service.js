@@ -2,6 +2,8 @@ const { Markup, Telegraf } = require("telegraf");
 const telegramRepository = require("../repositories/telegram.repository");
 const orderRepository = require("../repositories/order.repository");
 const realtimeService = require("../services/realtime.service");
+const orderSourceRepository = require("../repositories/order-source.repository");
+const { ensurePhoto } = require("./order-source-photo.service");
 
 function positiveInteger(value, fallback) {
   const parsed = Number(value);
@@ -186,8 +188,9 @@ async function replyWrongOrderGroup(ctx, message) {
 
 async function ingestIncomingOrder(ctx) {
   const message = ctx.message;
-  if (!isGroupChat(ctx.chat) || !message?.text) return;
-  const parsed = parseIncomingOrder(message.text.trim());
+  const text = message?.text || message?.caption;
+  if (!isGroupChat(ctx.chat) || !text) return;
+  const parsed = parseIncomingOrder(text.trim());
   if (!parsed) return;
   const group = await telegramRepository.getGroupByChatThread(ctx.chat.id, getThreadId(message));
   if (!group || !group.is_active) return;
@@ -204,8 +207,9 @@ async function ingestIncomingOrder(ctx) {
 
 async function ingestConfigOrder(ctx) {
   const message = ctx.message;
-  if (!isGroupChat(ctx.chat) || !message?.text) return;
-  const parsed = parseConfigOrder(message.text.trim());
+  const text = message?.text || message?.caption;
+  if (!isGroupChat(ctx.chat) || !text) return;
+  const parsed = parseConfigOrder(text.trim());
   if (!parsed) return;
   const group = await telegramRepository.getGroupByChatThread(ctx.chat.id, getThreadId(message));
   if (!group || !group.is_active) return;
@@ -218,6 +222,37 @@ async function ingestConfigOrder(ctx) {
   }
   const order = await orderRepository.createIncomingOrder({ group, message, ...parsed });
   if (order) realtimeService.emitOrdersChanged();
+}
+
+async function ingestPhotoOrder(ctx) {
+  const message = ctx.message;
+  if (!isGroupChat(ctx.chat) || !message?.photo?.length) return;
+  const caption = message.caption?.trim() || "";
+  const incoming = parseIncomingOrder(caption);
+  const config = parseConfigOrder(caption);
+  // Captionless album members are retained until their caption arrives.
+  if (!incoming && !config && !message.media_group_id) return;
+  const group = await telegramRepository.getGroupByChatThread(ctx.chat.id, getThreadId(message));
+  if (!group?.is_active || !["PENGAWALAN", "LOGIC"].includes(group.category)) return;
+  if ((incoming && group.category !== "PENGAWALAN") || (config && group.category !== "LOGIC")) {
+    await replyWrongOrderGroup(ctx, "⚠️ Format caption tidak sesuai jenis grup. #req/#assign untuk Pengawalan; /config untuk Logic.");
+    return;
+  }
+  await orderSourceRepository.record(group, message);
+  if (incoming) await ingestIncomingOrder(ctx);
+  else if (config) await ingestConfigOrder(ctx);
+  const orderId = await orderSourceRepository.link(group, message);
+  if (!orderId) return;
+  const photos = await orderSourceRepository.pending(orderId);
+  await Promise.all(photos.map((photo) => ensurePhoto(photo, bot.telegram).catch(() => {
+    console.error("Foto sumber order belum tersimpan; akan dicoba lagi saat dibuka.");
+  })));
+  realtimeService.emitOrdersChanged();
+}
+
+async function getSourcePhoto(photo) {
+  if (!bot) throw Object.assign(new Error("Bot Telegram tidak tersedia"), { statusCode: 503 });
+  return ensurePhoto(photo, bot.telegram);
 }
 
 async function ensureAdmin(ctx) {
@@ -360,6 +395,7 @@ function registerHandlers() {
   bot.command("alarmstatus", async (ctx) => { try { await handleAlarmStatus(ctx); } catch (error) { console.error("/alarmstatus gagal:", error.message); await ctx.reply(`⚠️ ${error.message}`); } });
   bot.command("config", async (ctx) => { try { await ingestConfigOrder(ctx); } catch (error) { console.error("Order config Telegram gagal diproses:", error.message); } });
   bot.on("text", async (ctx) => { try { await ingestIncomingOrder(ctx); } catch (error) { console.error("Order Telegram gagal diproses:", error.message); } });
+  bot.on("photo", async (ctx) => { try { await ingestPhotoOrder(ctx); } catch { console.error("Order dari caption foto gagal diproses. Periksa migrasi dan koneksi database."); } });
   bot.action(/^setgroup:city:(\d+)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; const segments = await telegramRepository.getSegments(); await ctx.editMessageText("Konfigurasi grup order\n\n2/4 — Pilih segmen:", segmentKeyboard(ctx.match[1], segments)); await ctx.answerCbQuery(); });
   bot.action(/^setgroup:segment:(\d+):(\d+)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await ctx.editMessageText("Konfigurasi grup order\n\n3/4 — Pilih alur kerja:", workflowKeyboard(ctx.match[1], ctx.match[2])); await ctx.answerCbQuery(); });
   bot.action(/^setgroup:flow:(\d+):(\d+):([AP])$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await ctx.editMessageText("Konfigurasi grup order\n\n4/4 — Pilih jenis grup:", categoryKeyboard(ctx.match[1], ctx.match[2], ctx.match[3])); await ctx.answerCbQuery(); });
@@ -544,6 +580,7 @@ async function startPolling() {
 
 
 module.exports = {
+  getSourcePhoto,
   startPolling,
   notifyOrderClaim,
   notifyOrderResult,

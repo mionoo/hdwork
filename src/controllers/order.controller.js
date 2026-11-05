@@ -1,6 +1,22 @@
 const orderService = require("../services/order.service");
 const telegramService = require("../services/telegram.service");
 const realtimeService = require("../services/realtime.service");
+const orderSourceRepository = require("../repositories/order-source.repository");
+
+async function getSourcePhoto(req, res) {
+  try {
+    if (!/^\d+$/.test(req.params.photoId)) return res.status(400).json({ success: false, message: "ID foto tidak valid" });
+    await orderService.getOrderById(req.params.id, req.user);
+    const photo = await orderSourceRepository.find(req.params.id, req.params.photoId);
+    if (!photo) return res.status(404).json({ success: false, message: "Foto tidak ditemukan" });
+    const filename = await telegramService.getSourcePhoto(photo);
+    res.set("Cache-Control", "private, no-store");
+    res.type("image/jpeg");
+    res.sendFile(filename);
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message || "Foto tidak dapat dimuat" });
+  }
+}
 
 async function getAllOrders(req, res) {
   try {
@@ -386,6 +402,7 @@ async function getOrderDetail(req, res) {
 }
 
 module.exports = {
+  getSourcePhoto,
   getAllOrders,
   getOrderById,
   claimOrder,
