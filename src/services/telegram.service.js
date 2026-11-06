@@ -101,7 +101,7 @@ function datinInstitutionKeyboard({ institutions, selectedIds, page, total, page
 }
 
 function parseIncomingOrder(text) {
-  const req = text.match(/^#req\s+([^,\s]+)\s*,\s*(.+)$/i);
+  const req = text.match(/^#req\s+([^,\s]+)\s*,\s*(.+)$/is);
   if (req) return { orderType: "REQ", serviceNumber: req[1], description: req[2].trim(), metadata: {} };
   const assign = text.match(/^#assign\s+([^,\s]+)\s*,\s*(.+)$/i);
   if (assign) {

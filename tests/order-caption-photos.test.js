@@ -37,7 +37,12 @@ async function fixture(category = "PENGAWALAN", active = true) {
     message: { chat: { id: -100 }, message_id: 1, photo: [{ file_id: "small" }, { file_id: "large" }], caption, ...extras },
     reply: async () => {},
   });
-  return { send, created, downloads, photos };
+  const sendText = async (text) => handlers.text({
+    chat: { id: -100, type: "supergroup" },
+    message: { chat: { id: -100 }, message_id: 1, text },
+    reply: async () => {},
+  });
+  return { send, sendText, created, downloads, photos };
 }
 
 test("caption #req creates an order and keeps highest resolution photo", async () => {
@@ -47,6 +52,20 @@ test("caption #req creates an order and keeps highest resolution photo", async (
   assert.equal(f.created[0].serviceNumber, "1523XXX");
   assert.equal(f.created[0].message.caption, "#req 1523XXX, embassy");
   assert.equal(f.downloads[0].file_id, "large");
+});
+
+test("multiline #req keeps the full description in group text and photo captions", async () => {
+  const description = "Mohon unbind UseeTV\n\n/unbind_iptv\n\nNo Tiket Nossa : INC123";
+  const request = `#req 1523XXX,\u00a0 ${description}`;
+
+  for (const sendMethod of ["sendText", "send"]) {
+    const f = await fixture();
+    await f[sendMethod](request);
+    assert.equal(f.created.length, 1);
+    assert.equal(f.created[0].orderType, "REQ");
+    assert.equal(f.created[0].serviceNumber, "1523XXX");
+    assert.equal(f.created[0].description, description);
+  }
 });
 
 test("album members before/after caption attach to one order, including duplicate delivery", async () => {
