@@ -10,6 +10,7 @@ const {
 const TELEGRAM_MESSAGE_LIMIT = 3900;
 let schedulerStarted = false;
 let schedulerRunning = false;
+let schedulerTimer;
 
 function safeJson(value, fallback) {
   try {
@@ -213,8 +214,9 @@ function millisecondsUntilNextTenMinuteMark(now = new Date()) {
 }
 
 function scheduleNextRun() {
+  if (!schedulerStarted) return;
   const delay = millisecondsUntilNextTenMinuteMark();
-  setTimeout(async () => {
+  schedulerTimer = setTimeout(async () => {
     await runScheduledNotifications();
     scheduleNextRun();
   }, delay);
@@ -227,10 +229,16 @@ function startCactiScheduler() {
   console.log("⏱️ Alarm Cacti dijadwalkan pada menit 00, 10, 20, 30, 40, dan 50");
 }
 
+function stopCactiScheduler() {
+  schedulerStarted = false;
+  clearTimeout(schedulerTimer);
+}
+
 module.exports = {
   recordCollectorHealth,
   runScheduledNotifications,
   startCactiScheduler,
+  stopCactiScheduler,
   splitAlarmDevices,
   healthProblems,
   millisecondsUntilNextTenMinuteMark,

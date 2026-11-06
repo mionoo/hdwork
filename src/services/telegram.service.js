@@ -1,4 +1,5 @@
 const { Markup, Telegraf } = require("telegraf");
+const { setTimeout: delay } = require("node:timers/promises");
 const telegramRepository = require("../repositories/telegram.repository");
 const orderRepository = require("../repositories/order.repository");
 const realtimeService = require("../services/realtime.service");
@@ -17,7 +18,12 @@ const PERSONAL_ALARM_RATE_PER_SECOND = positiveInteger(process.env.TELEGRAM_PERS
 const PERSONAL_ALARM_RETRY_LIMIT = positiveInteger(process.env.TELEGRAM_PERSONAL_ALARM_RETRY_LIMIT, 3);
 const PERSONAL_ALARM_INTERVAL_MS = Math.ceil(1000 / PERSONAL_ALARM_RATE_PER_SECOND);
 const DATIN_INSTITUTIONS_PER_PAGE = 8;
-let started = false;
+const POLLING_RETRY_DELAYS = [2000, 4000, 8000, 16000, 30000];
+const POLLING_REQUEST_TIMEOUT_MS = 10000;
+let handlersRegistered = false;
+let pollingTask;
+let pollingController;
+let pollingActive = false;
 let personalAlarmQueue = Promise.resolve();
 let nextPersonalAlarmAt = 0;
 
@@ -570,18 +576,80 @@ async function sendPersonalAlarmMessage(chatId, text) {
   return personalAlarmQueue;
 }
 
-async function startPolling() {
-  if (!bot || started) return;
-  started = true;
-  registerHandlers();
-  await bot.launch();
-  console.log("🤖 Telegraf polling aktif");
+async function runPolling(signal) {
+  for (let attempt = 0; !signal.aborted; attempt += 1) {
+    try {
+      const startupRequest = () => ({
+        signal: AbortSignal.any([signal, AbortSignal.timeout(POLLING_REQUEST_TIMEOUT_MS)]),
+      });
+      bot.botInfo ??= await bot.telegram.callApi("getMe", {}, startupRequest());
+      signal.throwIfAborted();
+      await bot.telegram.callApi("deleteWebhook", {}, startupRequest());
+      signal.throwIfAborted();
+
+      // Telegraf 4's launch couples network setup and the long-lived polling loop.
+      // Start that same loop after the abortable setup to avoid starting during shutdown.
+      const polling = bot.startPolling();
+      pollingActive = true;
+      console.log("🤖 Polling Telegram dimulai");
+      try {
+        await polling;
+      } finally {
+        pollingActive = false;
+      }
+      return;
+    } catch (error) {
+      if (signal.aborted) return;
+      const code = error.code;
+      if (code === 409) {
+        console.error("Polling Telegram dihentikan karena konflik 409. Periksa proses lain yang memakai token bot yang sama.");
+        return;
+      }
+
+      const retryDelay = POLLING_RETRY_DELAYS[attempt];
+      const temporary = ["FetchError", "AbortError", "TimeoutError"].includes(error.name)
+        || code === 429 || (typeof code === "number" && code >= 500);
+      if (!temporary || retryDelay === undefined) {
+        console.error(`Polling Telegram gagal setelah ${attempt + 1} percobaan: ${error.message}`);
+        return;
+      }
+
+      const retryAfter = code === 429 ? Number(error.parameters?.retry_after) * 1000 || 0 : 0;
+      const waitMs = Math.max(retryDelay, retryAfter);
+      console.warn(`Polling Telegram gagal: ${error.message}. Retry ${attempt + 1}/${POLLING_RETRY_DELAYS.length} dalam ${waitMs / 1000} detik.`);
+      await delay(waitMs, undefined, { signal }).catch((error) => {
+        if (!signal.aborted) throw error;
+      });
+    }
+  }
+}
+
+function startPolling() {
+  if (!bot || pollingTask) return pollingTask;
+  if (!handlersRegistered) {
+    registerHandlers();
+    handlersRegistered = true;
+  }
+  pollingController = new AbortController();
+  pollingTask = runPolling(pollingController.signal).finally(() => {
+    pollingTask = undefined;
+    pollingController = undefined;
+  });
+  return pollingTask;
+}
+
+function stopPolling(reason) {
+  if (!pollingController || pollingController.signal.aborted) return pollingTask;
+  pollingController.abort();
+  if (pollingActive) bot.stop(reason);
+  return pollingTask;
 }
 
 
 module.exports = {
   getSourcePhoto,
   startPolling,
+  stopPolling,
   notifyOrderClaim,
   notifyOrderResult,
   sendMessage,

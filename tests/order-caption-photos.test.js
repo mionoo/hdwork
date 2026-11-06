@@ -5,7 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 function load(file, dependencies) {
-  const sandbox = { module: { exports: {} }, console, setTimeout, process: { env: { TELEGRAM_BOT_TOKEN: "test-only" } }, require: (name) => dependencies[name] || {} };
+  const sandbox = { module: { exports: {} }, console, setTimeout, AbortController, AbortSignal, process: { env: { TELEGRAM_BOT_TOKEN: "test-only" } }, require: (name) => dependencies[name] || {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", file), "utf8"), sandbox);
   return sandbox.module.exports;
 }
@@ -15,8 +15,8 @@ async function fixture(category = "PENGAWALAN", active = true) {
   let order = null;
   const service = load("src/services/telegram.service.js", {
     telegraf: { Telegraf: class {
-      constructor() { this.telegram = {}; } command() {} action() {} catch() {}
-      on(type, handler) { handlers[type] = handler; } async launch() {}
+      constructor() { this.telegram = { callApi: async () => ({}) }; } command() {} action() {} catch() {}
+      on(type, handler) { handlers[type] = handler; } async startPolling() {}
     } },
     "../repositories/telegram.repository": { getGroupByChatThread: async () => ({ id: 8, category, is_active: active }) },
     "../repositories/order.repository": { createIncomingOrder: async (payload) => {
