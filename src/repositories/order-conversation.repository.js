@@ -34,18 +34,18 @@ async function findParent({ groupId, chatId, threadId, replyId, albumId }) {
   return rows[0] || null;
 }
 
-async function recordReply({ parent, chatId, threadId, message, sender, content, excerpt, media }) {
+async function recordReply({ parent, chatId, threadId, message, sender, content, excerpt, media, outbound = false }) {
   await pool.query(`
     INSERT INTO order_telegram_messages
       (order_id, chat_id, thread_id, message_id, kind, reply_to_message_id, reply_excerpt,
-       sender_name, content, album_id, media_kind, file_id, file_name, mime_type, file_size, sent_at)
-    VALUES (?, ?, ?, ?, 'reply', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TIMESTAMPADD(SECOND, ?, '1970-01-01 00:00:00'))
+       sender_name, content, album_id, media_kind, file_id, file_name, mime_type, file_size, is_outbound, sent_at)
+    VALUES (?, ?, ?, ?, 'reply', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TIMESTAMPADD(SECOND, ?, '1970-01-01 00:00:00'))
     ON DUPLICATE KEY UPDATE id = order_telegram_messages.id
   `, [
     parent.order_id, chatId, threadId, message.message_id, parent.reply_to_message_id, excerpt,
     sender, content, message.media_group_id || null, media?.kind || null, media?.file.file_id || null,
     media?.file.file_name?.slice(0, 255) || null, media?.file.mime_type?.slice(0, 127) || null,
-    media?.file.file_size ?? null, message.date,
+    media?.file.file_size ?? null, Number(outbound), message.date,
   ]);
 }
 
@@ -61,7 +61,7 @@ async function recordOutgoing({ orderId, chatId, threadId, messageIds, kind }) {
 
 async function list(orderId) {
   const [rows] = await pool.query(`
-    SELECT id, sender_name, content, reply_excerpt, album_id, media_kind, file_name, file_size,
+    SELECT id, sender_name, content, reply_excerpt, album_id, media_kind, file_name, file_size, is_outbound,
       DATE_FORMAT(sent_at, '%Y-%m-%dT%H:%i:%sZ') AS sent_at
     FROM order_telegram_messages
     WHERE order_id = ? AND kind = 'reply'
@@ -78,4 +78,19 @@ async function findMedia(orderId, messageId) {
   return rows[0] || null;
 }
 
-module.exports = { findParent, recordReply, recordOutgoing, list, findMedia };
+async function findReplyTarget(orderId, replyId, userId) {
+  const [rows] = await pool.query(`
+    SELECT m.chat_id, m.thread_id, m.message_id, m.content, m.file_name, u.name AS owner_name
+    FROM order_telegram_messages m
+    JOIN orders o ON o.id = m.order_id
+    JOIN telegram_groups tg ON tg.id = o.telegram_group_id
+    JOIN users u ON u.id = o.performance_owner_id
+    WHERE m.order_id = ? AND m.id = ? AND m.kind = 'reply'
+      AND o.performance_owner_id = ? AND o.status IN ('IN_PROGRESS', 'ESCALATED')
+      AND tg.is_active = 1 AND tg.archived_at IS NULL
+      AND tg.telegram_chat_id = m.chat_id AND tg.telegram_thread_id = m.thread_id
+  `, [orderId, replyId, userId]);
+  return rows[0] || null;
+}
+
+module.exports = { findParent, recordReply, recordOutgoing, list, findMedia, findReplyTarget };

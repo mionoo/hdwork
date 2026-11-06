@@ -170,6 +170,21 @@ export type TelegramOrderReply = {
   media_kind: string | null
   file_name: string | null
   file_size: number | null
+  is_outbound?: 0 | 1
+}
+
+export async function sendTelegramOrderReply(token: string, orderId: number, messageId: number, content: string, file: File | null) {
+  const body = new FormData()
+  body.append("content", content)
+  if (file) body.append("file", file)
+  const response = await fetch(`${API_URL}/orders/${orderId}/conversation/${messageId}/reply`, {
+    method: "POST", headers: { Authorization: `Bearer ${token}` }, body,
+  })
+  const result = await response.json().catch(() => null)
+  if (!response.ok || !result?.success) {
+    throw new Error(result?.message || "Pengiriman belum dapat dikonfirmasi. Periksa grup Telegram sebelum mengirim ulang.")
+  }
+  return result.data as { replies?: TelegramOrderReply[]; warning?: string }
 }
 
 export type OrderDetail = {

@@ -294,6 +294,55 @@ function replyMedia(message) {
   return kind ? { kind, file: message[kind] } : null;
 }
 
+async function sendConversationReply({ orderId, replyId, userId, target, content, attachment }) {
+  if (!bot) throw Object.assign(new Error("Bot Telegram tidak tersedia"), { statusCode: 503 });
+  const chatId = target.chat_id;
+  const threadId = Number(target.thread_id);
+  return queueOrderMessage(chatId, threadId, async () => {
+    const currentTarget = await conversationRepository.findReplyTarget(orderId, replyId, userId);
+    if (!currentTarget) {
+      throw Object.assign(new Error("Pesan tujuan atau akses order sudah berubah."), { statusCode: 409 });
+    }
+    const options = {
+      ...(threadId ? { message_thread_id: threadId } : {}),
+      reply_parameters: { message_id: Number(target.message_id), allow_sending_without_reply: false },
+    };
+    let message;
+    try {
+      if (attachment) {
+        const method = {
+          "image/jpeg": "sendPhoto", "image/png": "sendPhoto",
+          "video/mp4": "sendVideo", "audio/mpeg": "sendAudio", "audio/mp4": "sendAudio",
+        }[attachment.mimetype] || "sendDocument";
+        message = await bot.telegram[method](chatId, { source: attachment.path, filename: attachment.originalname }, {
+          ...options, ...(content ? { caption: content } : {}),
+        });
+      } else {
+        message = await bot.telegram.sendMessage(chatId, content, options);
+      }
+    } catch (error) {
+      const rejected = error.response?.error_code >= 400 && error.response?.error_code < 500;
+      const detail = rejected ? "Telegram menolak balasan. Periksa pesan tujuan atau format lampiran."
+        : "Pengiriman belum dapat dikonfirmasi. Periksa grup Telegram sebelum mengirim ulang.";
+      throw Object.assign(new Error(detail), { statusCode: 502 });
+    }
+
+    try {
+      await conversationRepository.recordReply({
+        parent: { order_id: orderId, reply_to_message_id: target.message_id },
+        chatId, threadId, message, sender: currentTarget.owner_name,
+        content: content || null, outbound: true,
+        excerpt: (target.content || target.file_name || "Lampiran Telegram").slice(0, 300),
+        media: replyMedia(message),
+      });
+      return { replies: await conversationRepository.list(orderId) };
+    } catch (error) {
+      console.error("Balasan terkirim tetapi riwayat Telegram gagal dimuat:", error.message);
+      return { warning: "Balasan terkirim ke Telegram, tetapi riwayat belum dapat diperbarui." };
+    }
+  });
+}
+
 async function ingestOrderReply(ctx) {
   const message = ctx.message;
   if (!isGroupChat(ctx.chat) || (message.from?.is_bot && !message.sender_chat)) return false;
@@ -766,6 +815,7 @@ function stopPolling(reason) {
 module.exports = {
   getSourcePhoto,
   getConversationMedia,
+  sendConversationReply,
   startPolling,
   stopPolling,
   notifyOrderClaim,

@@ -65,6 +65,58 @@ test("file-only results add no automatic caption", async () => {
   assert.equal(calls[0].args[2].caption, undefined);
 });
 
+test("conversation sends a file as a strict reply and records the outgoing attachment", async () => {
+  const target = { chat_id: -100, thread_id: 7, message_id: 12, owner_name: "HD", content: "Periksa modem" };
+  const recorded = [];
+  const calls = [];
+  const service = load("../src/services/telegram.service.js", {
+    telegraf: { Telegraf: class {
+      telegram = { sendDocument: async (...args) => {
+        calls.push(args);
+        return { message_id: 33, date: 1700000000, document: { file_id: "telegram-file", file_name: "bukti.pdf" } };
+      } };
+    } },
+    "../repositories/order-conversation.repository": {
+      findReplyTarget: async () => target,
+      recordReply: async (entry) => recorded.push(entry),
+      list: async () => [{ id: 9, is_outbound: 1 }],
+    },
+  }, { TELEGRAM_BOT_TOKEN: "test-only" });
+  const result = await service.sendConversationReply({
+    orderId: 1, replyId: 2, userId: 3, target, content: "",
+    attachment: { path: "/test/reply", originalname: "bukti.pdf", mimetype: "application/pdf" },
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], -100);
+  assert.equal(calls[0][2].reply_parameters.message_id, 12);
+  assert.equal(calls[0][2].reply_parameters.allow_sending_without_reply, false);
+  assert.equal(calls[0][2].message_thread_id, 7);
+  assert.equal(calls[0][2].caption, undefined);
+  assert.equal(recorded[0].parent.order_id, 1);
+  assert.equal(recorded[0].outbound, true);
+  assert.equal(recorded[0].media.file.file_id, "telegram-file");
+  assert.equal(result.replies[0].is_outbound, 1);
+});
+
+test("conversation refuses a target outside the order and removes temporary uploads", async () => {
+  let cleaned = false;
+  let sent = false;
+  const controller = load("../src/controllers/order.controller.js", {
+    "node:fs/promises": { unlink: async () => { cleaned = true; } },
+    "../services/order.service": { getOrderById: async () => ({ id: 1, performance_owner_id: 3, status: "IN_PROGRESS" }) },
+    "../repositories/order-conversation.repository": { findReplyTarget: async () => null },
+    "../services/telegram.service": { sendConversationReply: async () => { sent = true; } },
+  });
+  let status;
+  await controller.replyToConversation({
+    params: { id: "1", messageId: "2" }, user: { id: 3, role: "HD" },
+    body: {}, file: { size: 1, path: "/test/reply" },
+  }, { status(code) { status = code; return this; }, json() {} });
+  assert.equal(status, 404);
+  assert.equal(sent, false);
+  assert.equal(cleaned, true);
+});
+
 test("complete with only a photo uses the completing HD's name as its only caption", async () => {
   const { service, calls } = telegram();
   const controller = load("../src/controllers/order.controller.js", {

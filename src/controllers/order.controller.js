@@ -1,3 +1,4 @@
+const { unlink } = require("node:fs/promises");
 const orderService = require("../services/order.service");
 const telegramService = require("../services/telegram.service");
 const realtimeService = require("../services/realtime.service");
@@ -9,6 +10,44 @@ const conversationMediaTypes = {
   voice: "audio/ogg", audio: "audio/mpeg", sticker: "image/webp", sticker_video: "video/webm",
 };
 const playableAudioTypes = new Set(["audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/webm"]);
+
+async function replyToConversation(req, res) {
+  try {
+    const { id, messageId } = req.params;
+    if (!/^\d+$/.test(id) || !/^\d+$/.test(messageId)) {
+      return res.status(400).json({ success: false, message: "ID order atau pesan tidak valid." });
+    }
+    if (req.user.role !== "HD") {
+      return res.status(403).json({ success: false, message: "Balasan hanya dapat dikirim oleh HD yang menangani order." });
+    }
+    const content = typeof req.body?.content === "string" ? req.body.content.trim() : "";
+    const attachment = req.file;
+    if ((!content && !attachment) || (attachment && !attachment.size)) {
+      return res.status(400).json({ success: false, message: "Isi balasan atau pilih satu lampiran." });
+    }
+    const maxLength = attachment ? 1024 : 4096;
+    if (content.length > maxLength) {
+      return res.status(400).json({ success: false, message: `Balasan maksimal ${maxLength} karakter.` });
+    }
+    const order = await orderService.getOrderById(id, req.user);
+    if (Number(order.performance_owner_id) !== Number(req.user.id) || !["IN_PROGRESS", "ESCALATED"].includes(order.status)) {
+      return res.status(403).json({ success: false, message: "Balasan hanya dapat dikirim oleh HD yang menangani order aktif." });
+    }
+    const target = await conversationRepository.findReplyTarget(order.id, messageId, req.user.id);
+    if (!target) return res.status(404).json({ success: false, message: "Pesan tujuan tidak tersedia untuk order ini." });
+    const result = await telegramService.sendConversationReply({
+      orderId: order.id, replyId: messageId, userId: req.user.id, target, content, attachment,
+    });
+    return res.status(201).json({ success: true, data: result });
+  } catch (error) {
+    if (!error.statusCode) console.error("Balasan order Telegram gagal:", error.message);
+    return res.status(error.statusCode || 500).json({ success: false, message: error.statusCode ? error.message : "Balasan gagal diproses." });
+  } finally {
+    if (req.file?.path) await unlink(req.file.path).catch((error) => {
+      console.error("File sementara balasan gagal dihapus:", error.code);
+    });
+  }
+}
 
 async function getConversationMedia(req, res) {
   try {
@@ -405,6 +444,7 @@ async function getOrderDetail(req, res) {
 module.exports = {
   getSourcePhoto,
   getConversationMedia,
+  replyToConversation,
   getAllOrders,
   getOrderById,
   claimOrder,

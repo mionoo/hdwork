@@ -506,7 +506,9 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
             {selectedMessage && <OrderSourcePhotos orderId={selectedMessage.id} photos={selectedMessage.source_photos} token={token} />}
             {selectedMessage && (
               <div className="mt-5 px-px pb-px">
-                <OrderTelegramConversation orderId={selectedMessage.id} replies={selectedMessage.telegram_conversation} token={token} />
+                <OrderTelegramConversation key={selectedMessage.id} orderId={selectedMessage.id}
+                  replies={selectedMessage.telegram_conversation} token={token}
+                  canReply={Boolean(selectedOrder && canQuickAction(selectedOrder))} />
               </div>
             )}
           </div>
