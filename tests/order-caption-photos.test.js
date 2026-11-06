@@ -10,12 +10,12 @@ function load(file, dependencies) {
   return sandbox.module.exports;
 }
 
-async function fixture(category = "PENGAWALAN", active = true) {
+async function fixture(category = "PENGAWALAN", active = true, conversation = { findParent: async () => null }) {
   const handlers = {}, created = [], photos = new Map(), downloads = [];
   let order = null;
   const service = load("src/services/telegram.service.js", {
     telegraf: { Telegraf: class {
-      constructor() { this.telegram = { callApi: async () => ({}) }; } command() {} action() {} catch() {}
+      constructor() { this.telegram = { callApi: async () => ({}), sendMessage: async () => ({ message_id: 4 }) }; } command() {} action() {} catch() {}
       on(type, handler) { handlers[type] = handler; } async startPolling() {}
     } },
     "../repositories/telegram.repository": { getGroupByChatThread: async () => ({ id: 8, category, is_active: active }) },
@@ -28,6 +28,7 @@ async function fixture(category = "PENGAWALAN", active = true) {
       link: async () => order?.id || null,
       pending: async () => [...photos.values()],
     },
+    "../repositories/order-conversation.repository": conversation,
     "./order-source-photo.service": { ensurePhoto: async (photo) => downloads.push(photo) },
     "../services/realtime.service": { emitOrdersChanged() {} },
   });
@@ -42,7 +43,11 @@ async function fixture(category = "PENGAWALAN", active = true) {
     message: { chat: { id: -100 }, message_id: 1, text },
     reply: async () => {},
   });
-  return { send, sendText, created, downloads, photos };
+  const receive = (type, message) => handlers[type]({
+    chat: { id: -100, type: "supergroup" },
+    message: { chat: { id: -100 }, date: 1700000000, is_topic_message: true, message_thread_id: 7, ...message },
+  });
+  return { send, sendText, receive, service, created, downloads, photos };
 }
 
 test("caption #req creates an order and keeps highest resolution photo", async () => {
@@ -87,6 +92,59 @@ test("plain photo without order caption is ignored", async () => {
   await f.send("Dokumentasi");
   assert.equal(f.photos.size, 0);
   assert.equal(f.created.length, 0);
+});
+
+test("Telegram reply chain links outgoing anchors and earlier album members to one order", async () => {
+  const anchors = new Map([[1, { order_id: 10, reply_to_message_id: 1 }]]);
+  const rows = [];
+  const f = await fixture("PENGAWALAN", true, {
+    findParent: async ({ chatId, threadId, replyId }) => {
+      assert.equal(chatId, -100);
+      assert.equal(threadId, 7);
+      return anchors.get(replyId);
+    },
+    recordReply: async (entry) => {
+      rows.push(entry);
+      anchors.set(entry.message.message_id, {
+        order_id: entry.parent.order_id, reply_to_message_id: entry.message.message_id,
+      });
+    },
+    recordOutgoing: async ({ orderId, messageIds, kind }) => {
+      assert.equal(kind, "claim");
+      for (const id of messageIds) anchors.set(id, { order_id: orderId, reply_to_message_id: id });
+    },
+  });
+  const claim = f.service.notifyOrderClaim({
+    order_id: 10, telegram_chat_id: -100, telegram_thread_id: 7, telegram_message_id: 1, user_name: "HD",
+  });
+  const reply = f.receive("text", { message_id: 5, text: "ralat", reply_to_message: { message_id: 4, text: "On progress" } });
+  await Promise.all([claim, reply]);
+  await f.receive("message", { message_id: 6, video: { file_id: "video" }, media_group_id: "album" });
+  await f.receive("photo", {
+    message_id: 7, photo: [{ file_id: "photo" }], media_group_id: "album", caption: "bukti",
+    reply_to_message: { message_id: 5, text: "ralat" },
+  });
+  await f.receive("text", { message_id: 8, text: "obrolan biasa" });
+  await f.receive("text", { message_id: 9, text: "balasan lain", reply_to_message: { message_id: 99 } });
+  assert.deepEqual(rows.map((row) => row.message.message_id), [5, 7, 6]);
+  assert.ok(rows.every((row) => row.parent.order_id === 10));
+  assert.equal(rows[1].content, "bukti");
+  assert.equal(rows[2].media.kind, "video");
+  assert.equal(rows[2].excerpt, "ralat");
+});
+
+test("conversation media refuses unauthorized requests before file lookup", async () => {
+  let lookup = false;
+  const controller = load("src/controllers/order.controller.js", {
+    "../services/order.service": { getOrderById: async () => { throw Object.assign(new Error("Tidak diizinkan"), { statusCode: 403 }); } },
+    "../repositories/order-conversation.repository": { findMedia: async () => { lookup = true; } },
+  });
+  let status;
+  await controller.getConversationMedia({ params: { id: "1", messageId: "2" }, user: { id: 5 } }, {
+    status(code) { status = code; return this; }, json() {},
+  });
+  assert.equal(status, 403);
+  assert.equal(lookup, false);
 });
 
 test("config caption creates CONFIG only in Logic groups", async () => {

@@ -4,7 +4,8 @@ const telegramRepository = require("../repositories/telegram.repository");
 const orderRepository = require("../repositories/order.repository");
 const realtimeService = require("../services/realtime.service");
 const orderSourceRepository = require("../repositories/order-source.repository");
-const { ensurePhoto } = require("./order-source-photo.service");
+const conversationRepository = require("../repositories/order-conversation.repository");
+const { ensurePhoto, ensureTelegramFile } = require("./order-source-photo.service");
 
 function positiveInteger(value, fallback) {
   const parsed = Number(value);
@@ -26,6 +27,10 @@ let pollingController;
 let pollingActive = false;
 let personalAlarmQueue = Promise.resolve();
 let nextPersonalAlarmAt = 0;
+const orderMessageQueues = new Map();
+const pendingReplyAlbums = new Map();
+const REPLY_ALBUM_WINDOW_MS = 30_000;
+const MAX_PENDING_REPLY_ALBUMS = 100;
 
 function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -37,6 +42,18 @@ function isGroupChat(chat) {
 
 function getThreadId(message) {
   return message?.is_topic_message ? message.message_thread_id : 0;
+}
+
+async function queueOrderMessage(chatId, threadId, work) {
+  const key = `${chatId}:${threadId || 0}`;
+  const previous = orderMessageQueues.get(key);
+  const task = (previous?.catch(() => {}) ?? Promise.resolve()).then(work);
+  orderMessageQueues.set(key, task);
+  try {
+    return await task;
+  } finally {
+    if (orderMessageQueues.get(key) === task) orderMessageQueues.delete(key);
+  }
 }
 
 function threadOptions(message) {
@@ -261,6 +278,78 @@ async function getSourcePhoto(photo) {
   return ensurePhoto(photo, bot.telegram);
 }
 
+async function getConversationMedia(file) {
+  if (!bot) throw Object.assign(new Error("Bot Telegram tidak tersedia"), { statusCode: 503 });
+  return ensureTelegramFile(file, bot.telegram, true);
+}
+
+function replyMedia(message) {
+  if (message.photo?.length) return { kind: "photo", file: message.photo.at(-1) };
+  if (message.sticker?.is_video) return { kind: "sticker_video", file: message.sticker };
+  if (message.sticker?.is_animated) {
+    return { kind: "document", file: { ...message.sticker, file_name: "stiker.tgs" } };
+  }
+  const kind = ["animation", "video", "video_note", "voice", "audio", "sticker", "document"]
+    .find((type) => message[type]?.file_id);
+  return kind ? { kind, file: message[kind] } : null;
+}
+
+async function ingestOrderReply(ctx) {
+  const message = ctx.message;
+  if (!isGroupChat(ctx.chat) || (message.from?.is_bot && !message.sender_chat)) return false;
+  const reply = message.reply_to_message;
+  if (!reply?.message_id && !message.media_group_id) return false;
+  const media = replyMedia(message);
+  const content = (message.text || message.caption || "").trim();
+  if (!content && !media) return false;
+
+  const chatId = ctx.chat.id;
+  const threadId = getThreadId(message);
+  const group = await telegramRepository.getGroupByChatThread(chatId, threadId);
+  if (!group?.is_active || !["PENGAWALAN", "LOGIC"].includes(group.category)) return false;
+
+  const parent = await conversationRepository.findParent({
+    groupId: group.id, chatId, threadId,
+    replyId: reply?.message_id, albumId: message.media_group_id,
+  });
+  const sender = message.sender_chat?.title || [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ")
+    || message.from?.username || "Pengirim Telegram";
+  const entry = { chatId, threadId, message, sender: sender.slice(0, 255), content: content || null, media };
+  const albumKey = message.media_group_id && `${chatId}:${threadId}:${message.media_group_id}`;
+  const pending = albumKey ? pendingReplyAlbums.get(albumKey) : null;
+  const album = pending && pending.expiresAt > Date.now() ? pending : null;
+  if (!parent) {
+    // An album member without a reply can arrive before the member that carries it.
+    if (albumKey && !reply && media) {
+      const buffer = album || { entries: new Map(), expiresAt: Date.now() + REPLY_ALBUM_WINDOW_MS };
+      if (buffer.entries.size < 10) buffer.entries.set(message.message_id, entry);
+      pendingReplyAlbums.set(albumKey, buffer);
+      if (pendingReplyAlbums.size > MAX_PENDING_REPLY_ALBUMS) {
+        pendingReplyAlbums.delete(pendingReplyAlbums.keys().next().value);
+      }
+    }
+    return false;
+  }
+
+  const excerpt = (message.quote?.text || reply?.text || reply?.caption
+    || parent.reply_excerpt || "Lampiran Telegram").trim().slice(0, 300);
+  await conversationRepository.recordReply({ ...entry, parent, excerpt });
+  if (albumKey) pendingReplyAlbums.delete(albumKey);
+  for (const sibling of album?.entries.values() || []) {
+    await conversationRepository.recordReply({ ...sibling, parent, excerpt });
+  }
+  return true;
+}
+
+async function handleOrderMessage(ctx, ingest) {
+  if (!isGroupChat(ctx.chat)) return;
+  try {
+    await queueOrderMessage(ctx.chat.id, getThreadId(ctx.message), ingest);
+  } catch (error) {
+    console.error("Pesan order Telegram gagal diproses:", error.message);
+  }
+}
+
 async function ensureAdmin(ctx) {
   if (!isGroupChat(ctx.chat)) {
     await ctx.reply("Perintah ini hanya dapat dijalankan di dalam grup Telegram.");
@@ -399,9 +488,16 @@ function registerHandlers() {
   bot.command("stopalarmnodeb", async (ctx) => { try { await handleAlarmUnsubscribe(ctx, "nodeb"); } catch (error) { console.error("/stopalarmnodeb gagal:", error.message); await ctx.reply(`⚠️ ${error.message}`); } });
   bot.command("stopalarmdatin", async (ctx) => { try { await handleAlarmUnsubscribe(ctx, "datin"); } catch (error) { console.error("/stopalarmdatin gagal:", error.message); await ctx.reply(`⚠️ ${error.message}`); } });
   bot.command("alarmstatus", async (ctx) => { try { await handleAlarmStatus(ctx); } catch (error) { console.error("/alarmstatus gagal:", error.message); await ctx.reply(`⚠️ ${error.message}`); } });
-  bot.command("config", async (ctx) => { try { await ingestConfigOrder(ctx); } catch (error) { console.error("Order config Telegram gagal diproses:", error.message); } });
-  bot.on("text", async (ctx) => { try { await ingestIncomingOrder(ctx); } catch (error) { console.error("Order Telegram gagal diproses:", error.message); } });
-  bot.on("photo", async (ctx) => { try { await ingestPhotoOrder(ctx); } catch { console.error("Order dari caption foto gagal diproses. Periksa migrasi dan koneksi database."); } });
+  bot.command("config", (ctx) => handleOrderMessage(ctx, () => ingestConfigOrder(ctx)));
+  bot.on("text", (ctx) => handleOrderMessage(ctx, () =>
+    parseIncomingOrder(ctx.message.text.trim()) ? ingestIncomingOrder(ctx) : ingestOrderReply(ctx)));
+  bot.on("photo", (ctx) => handleOrderMessage(ctx, async () => {
+    const caption = ctx.message.caption?.trim() || "";
+    if (parseIncomingOrder(caption) || parseConfigOrder(caption) || !(await ingestOrderReply(ctx))) {
+      await ingestPhotoOrder(ctx);
+    }
+  }));
+  bot.on("message", (ctx) => handleOrderMessage(ctx, () => ingestOrderReply(ctx)));
   bot.action(/^setgroup:city:(\d+)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; const segments = await telegramRepository.getSegments(); await ctx.editMessageText("Konfigurasi grup order\n\n2/4 — Pilih segmen:", segmentKeyboard(ctx.match[1], segments)); await ctx.answerCbQuery(); });
   bot.action(/^setgroup:segment:(\d+):(\d+)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await ctx.editMessageText("Konfigurasi grup order\n\n3/4 — Pilih alur kerja:", workflowKeyboard(ctx.match[1], ctx.match[2])); await ctx.answerCbQuery(); });
   bot.action(/^setgroup:flow:(\d+):(\d+):([AP])$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await ctx.editMessageText("Konfigurasi grup order\n\n4/4 — Pilih jenis grup:", categoryKeyboard(ctx.match[1], ctx.match[2], ctx.match[3])); await ctx.answerCbQuery(); });
@@ -427,8 +523,25 @@ function registerHandlers() {
 
 async function notifyOrderClaim(claim) {
   if (!bot || !claim.telegram_chat_id || !claim.telegram_message_id) return;
-  try { await bot.telegram.sendMessage(claim.telegram_chat_id, `🟡 On progress oleh ${claim.user_name}`, { ...(claim.telegram_thread_id ? { message_thread_id: claim.telegram_thread_id } : {}), reply_to_message_id: claim.telegram_message_id }); }
+  try {
+    await queueOrderMessage(claim.telegram_chat_id, claim.telegram_thread_id, async () => {
+      const message = await bot.telegram.sendMessage(claim.telegram_chat_id, `🟡 On progress oleh ${claim.user_name}`, {
+        ...(claim.telegram_thread_id ? { message_thread_id: claim.telegram_thread_id } : {}),
+        reply_to_message_id: claim.telegram_message_id,
+      });
+      await rememberOutgoing(claim.order_id, claim.telegram_chat_id, claim.telegram_thread_id, [message.message_id], "claim");
+    });
+  }
   catch (error) { console.error("Notifikasi claim Telegram gagal:", error.message); }
+}
+
+async function rememberOutgoing(orderId, chatId, threadId, messageIds, kind) {
+  if (!orderId || !messageIds.length) return;
+  try {
+    await conversationRepository.recordOutgoing({ orderId, chatId, threadId, messageIds, kind });
+  } catch (error) {
+    console.error("ID pesan Telegram tidak dapat dicatat:", error.message);
+  }
 }
 
 function replyOptions(notification) {
@@ -487,7 +600,10 @@ async function notifyOrderResult(notification) {
   if (!bot || !notification?.chat_id) {
     return { delivered: false, message_id: null, error: "Bot atau tujuan Telegram tidak tersedia" };
   }
+  return queueOrderMessage(notification.chat_id, notification.thread_id, () => deliverOrderResult(notification));
+}
 
+async function deliverOrderResult(notification) {
   const options = replyOptions(notification);
   const deliveries = [];
   const errors = [];
@@ -510,6 +626,7 @@ async function notifyOrderResult(notification) {
   const fileDelivery = await sendResultFiles(notification, options, useCaption ? content : undefined);
   deliveries.push(...fileDelivery.deliveries);
   errors.push(...fileDelivery.errors);
+  await rememberOutgoing(notification.order_id, notification.chat_id, notification.thread_id, deliveries, "result");
 
   return {
     delivered: deliveries.length > 0 && errors.length === 0,
@@ -648,6 +765,7 @@ function stopPolling(reason) {
 
 module.exports = {
   getSourcePhoto,
+  getConversationMedia,
   startPolling,
   stopPolling,
   notifyOrderClaim,

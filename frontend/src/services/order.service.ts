@@ -39,6 +39,7 @@ export type OrderRawMessage = {
   telegram_group: string
   raw_message: string | null
   source_photos?: Array<{ id: number }>
+  telegram_conversation?: TelegramOrderReply[]
 }
 
 type OrdersResponse = {
@@ -159,6 +160,18 @@ export type OrderResult = {
   files: OrderResultFile[]
 }
 
+export type TelegramOrderReply = {
+  id: number
+  sender_name: string
+  content: string | null
+  reply_excerpt: string | null
+  sent_at: string
+  album_id: string | null
+  media_kind: string | null
+  file_name: string | null
+  file_size: number | null
+}
+
 export type OrderDetail = {
   order: Order & {
     old_ont_serial?: string | null
@@ -172,6 +185,7 @@ export type OrderDetail = {
   events: OrderEvent[]
   notes: OrderNote[]
   results: OrderResult[]
+  telegram_conversation?: TelegramOrderReply[]
 }
 
 export type ReassignTarget = {

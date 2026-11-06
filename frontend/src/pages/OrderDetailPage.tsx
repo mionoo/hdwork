@@ -17,6 +17,7 @@ import OrderStatusBadge from "@/components/OrderStatusBadge";
 
 import { useAuth } from "@/contexts/AuthContext";
 import OrderSourcePhotos from "@/components/OrderSourcePhotos";
+import OrderTelegramConversation from "@/components/OrderTelegramConversation";
 
 import {
   completeOrder,
@@ -611,6 +612,7 @@ export default function OrderDetailPage() {
             )}
           </CardContent>
         </Card>
+        <OrderTelegramConversation orderId={order.id} replies={detail.telegram_conversation} token={token} />
       </div>
 
       {isReassignDialogOpen && (

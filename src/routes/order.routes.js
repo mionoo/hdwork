@@ -9,6 +9,7 @@ router.use(authMiddleware);
 
 router.get("/", orderController.getAllOrders);
 router.get("/:id/source-photos/:photoId", orderController.getSourcePhoto);
+router.get("/:id/conversation-media/:messageId", orderController.getConversationMedia);
 router.get("/:id/detail", orderController.getOrderDetail);
 router.get("/:id/reassign-targets", orderController.getReassignTargets);
 router.get("/:id", orderController.getOrderById);

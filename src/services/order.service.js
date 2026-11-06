@@ -1,6 +1,7 @@
 const orderRepository = require("../repositories/order.repository");
 const breakoutRepository = require("../repositories/breakout.repository");
 const orderSourceRepository = require("../repositories/order-source.repository");
+const conversationRepository = require("../repositories/order-conversation.repository");
 
 async function getAllOrders(filters, currentUser) {
   const scopedFilters = {
@@ -190,6 +191,7 @@ async function getOrderDetail(
   }
 
   result.order.source_photos = await orderSourceRepository.list(orderId);
+  result.telegram_conversation = await conversationRepository.list(orderId);
   return result;
 }
 

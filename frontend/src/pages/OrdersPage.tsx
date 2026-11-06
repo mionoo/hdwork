@@ -13,6 +13,7 @@ import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import OrderStatusBadge from "@/components/OrderStatusBadge"
 import OrderSourcePhotos from "@/components/OrderSourcePhotos"
+import OrderTelegramConversation from "@/components/OrderTelegramConversation"
 import {
   Dialog,
   DialogContent,
@@ -503,6 +504,11 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
               {selectedMessage?.raw_message || "Pesan asli tidak tersedia."}
             </pre>
             {selectedMessage && <OrderSourcePhotos orderId={selectedMessage.id} photos={selectedMessage.source_photos} token={token} />}
+            {selectedMessage && (
+              <div className="mt-5 px-px pb-px">
+                <OrderTelegramConversation orderId={selectedMessage.id} replies={selectedMessage.telegram_conversation} token={token} />
+              </div>
+            )}
           </div>
 
           {selectedOrder && canQuickAction(selectedOrder) && (

@@ -2,6 +2,33 @@ const orderService = require("../services/order.service");
 const telegramService = require("../services/telegram.service");
 const realtimeService = require("../services/realtime.service");
 const orderSourceRepository = require("../repositories/order-source.repository");
+const conversationRepository = require("../repositories/order-conversation.repository");
+
+const conversationMediaTypes = {
+  photo: "image/jpeg", video: "video/mp4", video_note: "video/mp4", animation: "video/mp4",
+  voice: "audio/ogg", audio: "audio/mpeg", sticker: "image/webp", sticker_video: "video/webm",
+};
+const playableAudioTypes = new Set(["audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/webm"]);
+
+async function getConversationMedia(req, res) {
+  try {
+    const { id, messageId } = req.params;
+    if (!/^\d+$/.test(messageId)) return res.status(400).json({ success: false, message: "ID pesan tidak valid" });
+    await orderService.getOrderById(id, req.user);
+    const media = await conversationRepository.findMedia(id, messageId);
+    if (!media) return res.status(404).json({ success: false, message: "Lampiran tidak ditemukan" });
+
+    const filename = await telegramService.getConversationMedia(media);
+    const type = playableAudioTypes.has(media.mime_type) && ["audio", "voice"].includes(media.media_kind)
+      ? media.mime_type : conversationMediaTypes[media.media_kind];
+    res.set({ "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
+    if (!type) res.attachment(media.file_name || "lampiran-telegram");
+    res.type(type || "application/octet-stream");
+    res.sendFile(filename);
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.statusCode ? error.message : "Lampiran gagal dimuat" });
+  }
+}
 
 async function getSourcePhoto(req, res) {
   try {
@@ -80,39 +107,7 @@ async function getOrderById(req, res) {
 
     return res.status(200).json({
       success: true,
-      data: order,
-    });
-  } catch (error) {
-    console.error(error);
-
-    return res.status(error.statusCode || 500).json({
-      success: false,
-      message:
-        error.message || "Gagal mengambil detail order",
-    });
-  }
-}
-
-async function getOrderById(req, res) {
-  try {
-    const { id } = req.params;
-    const currentUser = req.user;
-
-    const order = await orderService.getOrderById(
-      id,
-      currentUser,
-    );
-
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: "Order tidak ditemukan",
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      data: order,
+      data: { ...order, telegram_conversation: await conversationRepository.list(order.id) },
     });
   } catch (error) {
     console.error(error);
@@ -280,7 +275,7 @@ async function sendResult(req, res) {
       telegram_message_id ?? null,
       files,
     );
-    const telegramDelivery = await telegramService.notifyOrderResult(result.telegram);
+    const telegramDelivery = await telegramService.notifyOrderResult({ ...result.telegram, order_id: id });
     if (telegramDelivery.message_id) {
       try {
         await orderService.markResultTelegramDelivery(
@@ -337,6 +332,7 @@ async function completeOrder(req, res) {
       resultDelivery = await telegramService.notifyOrderResult({
         ...result.telegram,
         ...result.telegram.result,
+        order_id: id,
         content: [content, completedBy && `oleh ${completedBy}`].filter(Boolean).join("\n\n"),
       });
       if (resultDelivery.message_id) {
@@ -408,6 +404,7 @@ async function getOrderDetail(req, res) {
 
 module.exports = {
   getSourcePhoto,
+  getConversationMedia,
   getAllOrders,
   getOrderById,
   claimOrder,

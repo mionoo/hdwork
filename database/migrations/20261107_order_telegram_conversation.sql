@@ -1,0 +1,23 @@
+CREATE TABLE IF NOT EXISTS order_telegram_messages (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  order_id BIGINT NOT NULL,
+  chat_id BIGINT NOT NULL,
+  thread_id BIGINT NOT NULL DEFAULT 0,
+  message_id BIGINT NOT NULL,
+  kind ENUM('claim', 'result', 'reply') NOT NULL,
+  reply_to_message_id BIGINT NULL,
+  reply_excerpt VARCHAR(300) NULL,
+  sender_name VARCHAR(255) NULL,
+  content TEXT NULL,
+  album_id VARCHAR(64) NULL,
+  media_kind VARCHAR(20) NULL,
+  file_id VARCHAR(512) NULL,
+  file_name VARCHAR(255) NULL,
+  mime_type VARCHAR(127) NULL,
+  file_size BIGINT NULL,
+  sent_at DATETIME NOT NULL,
+  UNIQUE KEY uq_order_telegram_message (chat_id, message_id),
+  KEY ix_order_telegram_timeline (order_id, kind, sent_at, message_id),
+  KEY ix_order_telegram_album_lookup (chat_id, thread_id, album_id),
+  CONSTRAINT fk_order_telegram_message_order FOREIGN KEY (order_id) REFERENCES orders (id) ON DELETE CASCADE
+);
