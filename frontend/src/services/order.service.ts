@@ -32,6 +32,7 @@ export type Order = {
 
   created_at: string
   completed_at: string | null
+  unread_reply_count?: number
 }
 
 export type OrderRawMessage = {
@@ -171,6 +172,21 @@ export type TelegramOrderReply = {
   file_name: string | null
   file_size: number | null
   is_outbound?: 0 | 1
+}
+
+export function latestIncomingReplyId(replies: TelegramOrderReply[] = []): string | null {
+  const latestId = replies.reduce((latest, reply) =>
+    reply.is_outbound ? latest : Math.max(latest, Number(reply.id)), 0)
+  return latestId > 0 ? String(latestId) : null
+}
+
+export async function markTelegramConversationRead(token: string, orderId: number, throughId: string) {
+  const response = await fetch(`${API_URL}/orders/${orderId}/conversation/read`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ through_id: throughId }),
+  })
+  if (!response.ok) throw new Error("Status baca belum dapat disimpan. Buka percakapan lagi untuk mencoba ulang.")
 }
 
 export async function sendTelegramOrderReply(token: string, orderId: number, messageId: number, content: string, file: File | null) {

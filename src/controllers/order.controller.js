@@ -11,6 +11,21 @@ const conversationMediaTypes = {
 };
 const playableAudioTypes = new Set(["audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/webm"]);
 
+async function markConversationRead(req, res) {
+  try {
+    const { id } = req.params;
+    const throughId = req.body?.through_id;
+    if (!/^\d+$/.test(id) || typeof throughId !== "string" || !/^[1-9]\d*$/.test(throughId)) {
+      return res.status(400).json({ success: false, message: "ID pesan tidak valid." });
+    }
+    const order = await orderService.getOrderById(id, req.user);
+    await conversationRepository.markRead(order.id, req.user.id, throughId);
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ success: false, message: "Status baca belum dapat disimpan." });
+  }
+}
+
 async function replyToConversation(req, res) {
   try {
     const { id, messageId } = req.params;
@@ -445,6 +460,7 @@ module.exports = {
   getSourcePhoto,
   getConversationMedia,
   replyToConversation,
+  markConversationRead,
   getAllOrders,
   getOrderById,
   claimOrder,

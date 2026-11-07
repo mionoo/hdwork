@@ -14,6 +14,14 @@ async function getAllOrders(filters = {}) {
   let sql = `
     SELECT
       o.id,
+      ${filters.viewer_user_id === undefined ? "0" : `(
+        SELECT COUNT(*) FROM order_telegram_messages tm
+        WHERE tm.order_id = o.id AND tm.kind = 'reply' AND tm.is_outbound = 0
+          AND tm.id > COALESCE((
+            SELECT last_read_id FROM order_telegram_reads
+            WHERE user_id = ? AND order_id = o.id
+          ), 0)
+      )`} AS unread_reply_count,
       o.ticket_number,
       o.service_number,
       o.sto,
@@ -61,7 +69,7 @@ async function getAllOrders(filters = {}) {
     WHERE 1 = 1
   `;
 
-  const params = [];
+  const params = filters.viewer_user_id === undefined ? [] : [filters.viewer_user_id];
 
   const groupIds = telegram_group_ids ?? (telegram_group_id ? [telegram_group_id] : null);
   if (groupIds) {

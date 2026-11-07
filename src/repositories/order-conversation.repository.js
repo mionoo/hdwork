@@ -93,4 +93,14 @@ async function findReplyTarget(orderId, replyId, userId) {
   return rows[0] || null;
 }
 
-module.exports = { findParent, recordReply, recordOutgoing, list, findMedia, findReplyTarget };
+async function markRead(orderId, userId, throughId) {
+  const [result] = await pool.query(`
+    INSERT INTO order_telegram_reads (user_id, order_id, last_read_id)
+    SELECT ?, order_id, id FROM order_telegram_messages
+    WHERE order_id = ? AND id = ? AND kind = 'reply' AND is_outbound = 0
+    ON DUPLICATE KEY UPDATE last_read_id = GREATEST(last_read_id, VALUES(last_read_id))
+  `, [userId, orderId, throughId]);
+  return result.affectedRows > 0;
+}
+
+module.exports = { findParent, recordReply, recordOutgoing, list, findMedia, findReplyTarget, markRead };

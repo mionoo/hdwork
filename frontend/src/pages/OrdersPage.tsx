@@ -14,6 +14,11 @@ import { Button } from "@/components/ui/button"
 import OrderStatusBadge from "@/components/OrderStatusBadge"
 import OrderSourcePhotos from "@/components/OrderSourcePhotos"
 import OrderTelegramConversation from "@/components/OrderTelegramConversation"
+import OrderNotificationSettings from "@/components/OrderNotificationSettings"
+import {
+  activateOrderSound, orderSoundReady, playOrderSound, readOrderSoundSettings, saveOrderSoundSettings,
+  type OrderSoundSettings,
+} from "@/lib/order-notification-sound"
 import {
   Dialog,
   DialogContent,
@@ -38,6 +43,8 @@ import {
   getOrderRawMessage,
   getOrderDetail,
   getOrders,
+  latestIncomingReplyId,
+  markTelegramConversationRead,
   sendResult,
   type Order,
   type OrderDetail,
@@ -93,6 +100,14 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
   const [quickCompleteError, setQuickCompleteError] = useState("")
   const [quickActionLoading, setQuickActionLoading] = useState(false)
   const requestVersion = useRef(0)
+  const messageRequestVersion = useRef(0)
+  const knownOrderIds = useRef<Set<number> | null>(null)
+  const selectedMessageRef = useRef(selectedMessage)
+  selectedMessageRef.current = selectedMessage
+  const [soundSettings, setSoundSettings] = useState(() => readOrderSoundSettings(user?.id ?? 0))
+  const soundSettingsRef = useRef(soundSettings)
+  soundSettingsRef.current = soundSettings
+  const [soundReady, setSoundReady] = useState(orderSoundReady)
   const scope = room ? String(room.id) : monitoredGroups?.map((group) => group.id).join(",")
 
   async function loadOrders() {
@@ -103,7 +118,15 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
       setLoadError("")
 
       const data = await getOrders(token, room ? { groupId: scope } : { groupIds: scope.split(",").map(Number) })
-      if (version === requestVersion.current) setOrders(data)
+      if (version !== requestVersion.current) return
+      const newOrder = knownOrderIds.current && data.some((order) =>
+        !knownOrderIds.current!.has(order.id) && order.status !== "DONE")
+      knownOrderIds.current = new Set(data.map((order) => order.id))
+      setOrders(data)
+      if (newOrder) {
+        try { playOrderSound(soundSettingsRef.current) }
+        catch { setSoundReady(false) }
+      }
 
     } catch (error) {
       if (version !== requestVersion.current) return
@@ -119,6 +142,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
   }
 
   useEffect(() => {
+    knownOrderIds.current = null
     loadOrders()
   }, [token, scope])
 
@@ -126,14 +150,46 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
     if (!token || !scope) return
 
     const socket = io(API_BASE_URL, { auth: { token } })
-    const refreshOrders = () => loadOrders()
+    const refreshOrders = () => {
+      void loadOrders()
+      const selectedId = selectedMessageRef.current?.id
+      if (selectedId) {
+        const version = ++messageRequestVersion.current
+        void getOrderRawMessage(token, selectedId).then((message) => {
+          if (version === messageRequestVersion.current && selectedMessageRef.current?.id === selectedId) {
+            setSelectedMessage(message)
+          }
+        }).catch(() => {
+          if (version === messageRequestVersion.current && selectedMessageRef.current?.id === selectedId) {
+            setError("Percakapan belum dapat diperbarui. Buka kembali pesan order.")
+          }
+        })
+      }
+    }
 
     socket.on("orders:changed", refreshOrders)
+    socket.on("connect", () => void loadOrders())
 
     return () => {
       socket.disconnect()
     }
   }, [token, scope])
+
+  useEffect(() => {
+    if (!token || !selectedMessage) return
+    const throughId = latestIncomingReplyId(selectedMessage.telegram_conversation)
+    if (!throughId) return
+    let cancelled = false
+    markTelegramConversationRead(token, selectedMessage.id, throughId).then(() => {
+      if (!cancelled) void loadOrders()
+    }).catch((failure) => { if (!cancelled) setError(failure.message) })
+    return () => { cancelled = true }
+  }, [token, selectedMessage])
+
+  function saveSound(settings: OrderSoundSettings) {
+    setSoundSettings(settings)
+    if (user) saveOrderSoundSettings(user.id, settings)
+  }
 
   async function handleClaim(order: Order) {
     if (!token) return
@@ -156,13 +212,15 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
 
   async function handleOpenMessage(order: Order) {
     if (!token) return
+    const version = ++messageRequestVersion.current
 
     try {
       setMessageLoadingId(order.id)
       setError("")
 
       setSelectedOrder(order)
-      setSelectedMessage(await getOrderRawMessage(token, order.id))
+      const message = await getOrderRawMessage(token, order.id)
+      if (version === messageRequestVersion.current) setSelectedMessage(message)
     } catch (error) {
       setSelectedOrder(null)
       setError(error instanceof Error ? error.message : "Gagal mengambil pesan asli")
@@ -279,6 +337,8 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
               <p className="text-muted-foreground">{room?.context ?? "Lihat antrean order dari beberapa grup sekaligus."}</p>
             </div>
             <div className="flex flex-wrap gap-2">
+              <OrderNotificationSettings settings={soundSettings} ready={soundReady} onSave={saveSound}
+                onActivate={async () => { await activateOrderSound(); setSoundReady(true) }} />
               {controls}
               {onLeaveRoom && <Button variant="outline" onClick={onLeaveRoom}>Keluar ruang</Button>}
             </div>
@@ -439,10 +499,16 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
                           variant="outline"
                           disabled={messageLoadingId === order.id}
                           onClick={() => handleOpenMessage(order)}
-                          aria-label={`Lihat pesan order #${order.id}`}
-                          title="Lihat pesan asli"
+                          aria-label={`Lihat pesan order #${order.id}${Number(order.unread_reply_count) > 0 ? `, ${order.unread_reply_count} balasan baru` : ""}`}
+                          title={Number(order.unread_reply_count) > 0 ? `${order.unread_reply_count} balasan baru` : "Lihat pesan asli"}
+                          className="relative"
                         >
                           <MessageSquare />
+                          {Number(order.unread_reply_count) > 0 && (
+                            <span aria-hidden="true" className="absolute -top-2 -right-2 flex min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[11px] leading-4 font-semibold text-primary-foreground">
+                              {Number(order.unread_reply_count) > 9 ? "9+" : order.unread_reply_count}
+                            </span>
+                          )}
                         </Button>
                         <Button
                           size="sm"
@@ -483,6 +549,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
         open={Boolean(selectedMessage)}
         onOpenChange={(open) => {
           if (!open) {
+            messageRequestVersion.current += 1
             setSelectedMessage(null)
             setSelectedOrder(null)
           }

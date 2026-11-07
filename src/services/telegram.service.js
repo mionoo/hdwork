@@ -387,6 +387,7 @@ async function ingestOrderReply(ctx) {
   for (const sibling of album?.entries.values() || []) {
     await conversationRepository.recordReply({ ...sibling, parent, excerpt });
   }
+  realtimeService.emitOrdersChanged();
   return true;
 }
 

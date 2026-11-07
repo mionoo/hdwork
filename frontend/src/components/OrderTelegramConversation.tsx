@@ -30,6 +30,7 @@ export default function OrderTelegramConversation({ orderId, replies = [], token
   const [targetId, setTargetId] = useState<number | null>(null)
   const [sending, setSending] = useState(false)
   const [notice, setNotice] = useState("")
+  useEffect(() => { setUpdatedReplies(null) }, [replies])
   const entries = new Map<string, TelegramOrderReply[]>()
   for (const reply of updatedReplies ?? replies) {
     const key = reply.album_id ? `album:${reply.album_id}` : `reply:${reply.id}`

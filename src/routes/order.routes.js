@@ -25,6 +25,7 @@ router.get("/:id", orderController.getOrderById);
 
 router.post("/:id/claim", orderController.claimOrder);
 router.post("/:id/conversation/:messageId/reply", replyUpload.single("file"), orderController.replyToConversation);
+router.post("/:id/conversation/read", orderController.markConversationRead);
 router.post("/:id/reassign", orderController.reassignOrder);
 router.post("/:id/escalate", orderController.escalateOrder);
 router.post("/:id/results", upload.array("files", 10), orderController.sendResult);

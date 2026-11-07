@@ -147,6 +147,28 @@ test("conversation media refuses unauthorized requests before file lookup", asyn
   assert.equal(lookup, false);
 });
 
+test("conversation read acknowledgement checks access and uses the displayed snapshot", async () => {
+  const seen = [];
+  const controller = load("src/controllers/order.controller.js", {
+    "../services/order.service": { getOrderById: async (id, user) => {
+      if (user.id !== 5) throw Object.assign(new Error("Tidak diizinkan"), { statusCode: 403 });
+      return { id: Number(id) };
+    } },
+    "../repositories/order-conversation.repository": {
+      markRead: async (...args) => seen.push(args),
+    },
+  });
+  const response = () => ({ status(code) { this.code = code; return this; }, json() {} });
+  const denied = response();
+  await controller.markConversationRead({ params: { id: "1" }, user: { id: 6 }, body: { through_id: "10" } }, denied);
+  assert.equal(denied.code, 403);
+  assert.equal(seen.length, 0);
+  const allowed = response();
+  await controller.markConversationRead({ params: { id: "1" }, user: { id: 5 }, body: { through_id: "10" } }, allowed);
+  assert.equal(allowed.code, 200);
+  assert.deepEqual(seen, [[1, 5, "10"]]);
+});
+
 test("config caption creates CONFIG only in Logic groups", async () => {
   const f = await fixture("LOGIC");
   await f.send("/config\nTIKET: IN1\nNO SERVICE: 123\nKETERANGAN: cek");

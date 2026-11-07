@@ -6,6 +6,7 @@ const conversationRepository = require("../repositories/order-conversation.repos
 async function getAllOrders(filters, currentUser) {
   const scopedFilters = {
     ...filters,
+    viewer_user_id: currentUser.id,
   };
 
   const multipleGroups = filters.telegram_group_ids !== undefined;

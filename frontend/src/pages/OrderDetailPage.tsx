@@ -23,6 +23,8 @@ import {
   completeOrder,
   escalateOrder,
   getOrderDetail,
+  latestIncomingReplyId,
+  markTelegramConversationRead,
   getReassignTargets,
   reassignOrder,
   sendResult,
@@ -117,6 +119,17 @@ export default function OrderDetailPage() {
   useEffect(() => {
     loadDetail();
   }, [token, id]);
+
+  useEffect(() => {
+    if (!token || !detail) return;
+    const throughId = latestIncomingReplyId(detail.telegram_conversation);
+    if (!throughId) return;
+    let cancelled = false;
+    markTelegramConversationRead(token, detail.order.id, throughId).catch((failure) => {
+      if (!cancelled) setError(failure.message);
+    });
+    return () => { cancelled = true; };
+  }, [token, detail]);
 
   useEffect(() => {
     const previews = Object.fromEntries(
