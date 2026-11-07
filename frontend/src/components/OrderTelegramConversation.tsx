@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react"
-import { Reply } from "lucide-react"
+import { Reply, ZoomIn, ZoomOut } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { API_URL } from "@/config/api"
 import { sendTelegramOrderReply, type TelegramOrderReply } from "@/services/order.service"
@@ -170,9 +171,29 @@ function ConversationMedia({ orderId, message, token }: {
   const [error, setError] = useState("")
   const kind = message.media_kind || "document"
   const label = mediaLabels[kind] || "Lampiran"
+  const isPhoto = kind === "photo"
+  const tooLarge = Number(message.file_size) > 20 * 1024 * 1024
+  const previewRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (!attempt || !token) return
+    const preview = previewRef.current
+    if (!isPhoto || tooLarge || !token || !preview || attempt) return
+    if (typeof IntersectionObserver === "undefined") {
+      setAttempt(1)
+      return
+    }
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        observer.disconnect()
+        setAttempt(1)
+      }
+    })
+    observer.observe(preview)
+    return () => observer.disconnect()
+  }, [attempt, isPhoto, token, tooLarge])
+
+  useEffect(() => {
+    if (!attempt || !token || tooLarge) return
     const controller = new AbortController()
     let url: string | undefined
     fetch(`${API_URL}/orders/${orderId}/conversation-media/${message.id}`, {
@@ -193,12 +214,20 @@ function ConversationMedia({ orderId, message, token }: {
       controller.abort()
       if (url) URL.revokeObjectURL(url)
     }
-  }, [attempt, message.id, orderId, token])
+  }, [attempt, message.id, orderId, token, tooLarge])
 
-  if (Number(message.file_size) > 20 * 1024 * 1024) {
+  if (tooLarge) {
     return <p className="text-sm text-muted-foreground">{message.file_name || label} · melebihi batas unduhan Telegram (20 MB)</p>
   }
   if (!media) {
+    if (isPhoto && !error) {
+      return (
+        <div ref={previewRef} role="status"
+          className="flex aspect-[4/3] w-full max-w-60 items-center justify-center rounded-md border bg-muted p-3 text-center text-sm text-muted-foreground">
+          {attempt ? "Memuat foto…" : "Pratinjau foto"}
+        </div>
+      )
+    }
     return (
       <div className="flex flex-wrap items-center gap-2 text-sm">
         {message.file_name && <span className="wrap-anywhere">{message.file_name}</span>}
@@ -213,7 +242,9 @@ function ConversationMedia({ orderId, message, token }: {
   const filename = message.file_name || `telegram-${message.id}${media.extension ? `.${media.extension}` : ""}`
   return (
     <div className="space-y-1">
-      {["photo", "sticker"].includes(kind) &&
+      {isPhoto && <ZoomableConversationPhoto url={media.url} filename={filename}
+        onError={() => { setMedia(null); setError("Foto belum dapat dimuat.") }} />}
+      {kind === "sticker" &&
         <img src={media.url} alt={label} className="max-h-80 max-w-full rounded-md object-contain" />}
       {["video", "video_note", "animation", "sticker_video"].includes(kind) &&
         <video src={media.url} controls playsInline className="max-h-80 w-full max-w-lg rounded-md" aria-label={label} />}
@@ -223,5 +254,56 @@ function ConversationMedia({ orderId, message, token }: {
         Unduh {message.file_name || label.toLowerCase()}
       </a>
     </div>
+  )
+}
+
+function ZoomableConversationPhoto({ url, filename, onError }: {
+  url: string
+  filename: string
+  onError: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [zoom, setZoom] = useState(100)
+  const previewButton = useRef<HTMLButtonElement>(null)
+
+  return (
+    <>
+      <Button ref={previewButton} type="button" variant="outline" aria-label="Perbesar foto"
+        className="relative block h-auto w-full max-w-60 overflow-hidden p-0"
+        onClick={() => { setZoom(100); setOpen(true) }}>
+        <img src={url} alt="Foto dalam percakapan Telegram" onError={onError}
+          className="aspect-[4/3] w-full bg-muted object-contain" />
+        <span className="absolute right-2 bottom-2 grid size-7 place-items-center rounded-md border bg-background">
+          <ZoomIn aria-hidden="true" />
+        </span>
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent finalFocus={previewButton} className="max-w-5xl space-y-3 p-3 sm:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <DialogTitle>Foto Telegram</DialogTitle>
+              <DialogDescription className="sr-only">Perbesar atau perkecil foto untuk melihat detailnya.</DialogDescription>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button type="button" size="icon" variant="outline" aria-label="Perkecil foto"
+                disabled={zoom === 100} onClick={() => setZoom((value) => value - 50)}>
+                <ZoomOut aria-hidden="true" />
+              </Button>
+              <output aria-live="polite" className="w-11 text-center text-sm tabular-nums">{zoom}%</output>
+              <Button type="button" size="icon" variant="outline" aria-label="Tambah zoom foto"
+                disabled={zoom === 300} onClick={() => setZoom((value) => value + 50)}>
+                <ZoomIn aria-hidden="true" />
+              </Button>
+              <Button type="button" variant="outline" onClick={() => setOpen(false)}>Tutup</Button>
+            </div>
+          </div>
+          <div className="h-[60svh] overflow-auto rounded-md bg-muted">
+            <img src={url} alt="Foto dalam percakapan Telegram"
+              className="block max-w-none object-contain" style={{ width: `${zoom}%`, height: `${zoom * 0.6}svh` }} />
+          </div>
+          <a href={url} download={filename} className="inline-block text-sm text-primary underline underline-offset-2">Unduh foto</a>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
