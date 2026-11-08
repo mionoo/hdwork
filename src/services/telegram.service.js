@@ -21,6 +21,13 @@ const PERSONAL_ALARM_INTERVAL_MS = Math.ceil(1000 / PERSONAL_ALARM_RATE_PER_SECO
 const DATIN_INSTITUTIONS_PER_PAGE = 8;
 const POLLING_RETRY_DELAYS = [2000, 4000, 8000, 16000, 30000];
 const POLLING_REQUEST_TIMEOUT_MS = 10000;
+const TELEGRAM_REQUEST_TIMEOUT_MS = 20000;
+const TELEGRAM_POLL_TIMEOUT_MS = 65000;
+const INCOMING_DATABASE_RETRY_DELAYS = [200, 500, 1000];
+const TRANSIENT_DATABASE_ERRORS = new Set([
+  "ER_LOCK_DEADLOCK", "ER_LOCK_WAIT_TIMEOUT", "ECONNRESET", "ETIMEDOUT",
+  "PROTOCOL_CONNECTION_LOST", "ECONNREFUSED",
+]);
 let handlersRegistered = false;
 let pollingTask;
 let pollingController;
@@ -28,6 +35,10 @@ let pollingActive = false;
 let personalAlarmQueue = Promise.resolve();
 let nextPersonalAlarmAt = 0;
 const orderMessageQueues = new Map();
+const outgoingMessageQueues = new Map();
+const replyMessageQueues = new Map();
+const outgoingReceipts = new Map();
+const limitedTelegramClients = new WeakSet();
 const pendingReplyAlbums = new Map();
 const REPLY_ALBUM_WINDOW_MS = 30_000;
 const MAX_PENDING_REPLY_ALBUMS = 100;
@@ -44,17 +55,61 @@ function getThreadId(message) {
   return message?.is_topic_message ? message.message_thread_id : 0;
 }
 
-async function queueOrderMessage(chatId, threadId, work) {
+async function queueOutgoingMessage(chatId, threadId, work) {
+  return queueTelegramWork(outgoingMessageQueues, chatId, threadId, work);
+}
+
+async function queueTelegramWork(queues, chatId, threadId, work) {
   const key = `${chatId}:${threadId || 0}`;
-  const previous = orderMessageQueues.get(key);
+  const previous = queues.get(key);
   const task = (previous?.catch(() => {}) ?? Promise.resolve()).then(work);
-  orderMessageQueues.set(key, task);
+  queues.set(key, task);
   try {
     return await task;
   } finally {
-    if (orderMessageQueues.get(key) === task) orderMessageQueues.delete(key);
+    if (queues.get(key) === task) queues.delete(key);
   }
 }
+
+async function trackOutgoingReceipt(chatId, threadId, sendAndRecord) {
+  const key = `${chatId}:${threadId || 0}`;
+  const task = Promise.resolve().then(sendAndRecord);
+  outgoingReceipts.set(key, task);
+  try {
+    return await task;
+  } finally {
+    if (outgoingReceipts.get(key) === task) outgoingReceipts.delete(key);
+  }
+}
+
+function limitTelegramRequests(telegram) {
+  if (!telegram?.callApi || limitedTelegramClients.has(telegram)) return;
+  limitedTelegramClients.add(telegram);
+  const callApi = telegram.callApi.bind(telegram);
+  telegram.callApi = async (method, payload, options = {}) => {
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    const signal = options.signal;
+    if (signal?.aborted) stop();
+    else signal?.addEventListener("abort", stop, { once: true });
+    const timeoutMs = method === "getUpdates" ? TELEGRAM_POLL_TIMEOUT_MS : TELEGRAM_REQUEST_TIMEOUT_MS;
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; stop(); }, timeoutMs);
+    try {
+      return await callApi(method, payload, { ...options, signal: controller.signal });
+    } catch (error) {
+      if (!timedOut) throw error;
+      console.warn("Permintaan Telegram melewati batas waktu", { method, timeout_ms: timeoutMs });
+      // Telegraf treats AbortError as a deliberate polling stop. Timeouts must retry instead.
+      throw Object.assign(new Error(`Permintaan Telegram ${method} melewati batas waktu.`), { name: "FetchError", code: "ETIMEDOUT" });
+    } finally {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", stop);
+    }
+  };
+}
+
+if (bot) limitTelegramRequests(bot.telegram);
 
 function threadOptions(message) {
   const threadId = getThreadId(message);
@@ -203,9 +258,11 @@ function helpMessage() {
 }
 
 async function replyWrongOrderGroup(ctx, message) {
-  await ctx.reply(message, {
-    ...threadOptions(ctx.message),
-    reply_to_message_id: ctx.message.message_id,
+  // Feedback must not keep Telegram's incoming batch waiting on a network send.
+  void queueOutgoingMessage(ctx.chat.id, getThreadId(ctx.message), () => ctx.reply(message, {
+    ...threadOptions(ctx.message), reply_to_message_id: ctx.message.message_id,
+  })).catch((error) => {
+    console.error("Pemberitahuan format grup gagal dikirim:", error.message);
   });
 }
 
@@ -225,7 +282,14 @@ async function ingestIncomingOrder(ctx) {
     return;
   }
   const order = await orderRepository.createIncomingOrder({ group, message, ...parsed });
-  if (order) realtimeService.emitOrdersChanged();
+  if (order) {
+    console.log("Order Telegram tersimpan", {
+      order_id: order.id, chat_id: ctx.chat.id, message_id: message.message_id,
+      at: new Date().toISOString(),
+    });
+  }
+  // A retry can find an order committed just before the database connection failed.
+  realtimeService.emitOrdersChanged();
 }
 
 async function ingestConfigOrder(ctx) {
@@ -244,7 +308,13 @@ async function ingestConfigOrder(ctx) {
     return;
   }
   const order = await orderRepository.createIncomingOrder({ group, message, ...parsed });
-  if (order) realtimeService.emitOrdersChanged();
+  if (order) {
+    console.log("Order Telegram tersimpan", {
+      order_id: order.id, chat_id: ctx.chat.id, message_id: message.message_id,
+      at: new Date().toISOString(),
+    });
+  }
+  realtimeService.emitOrdersChanged();
 }
 
 async function ingestPhotoOrder(ctx) {
@@ -266,10 +336,7 @@ async function ingestPhotoOrder(ctx) {
   else if (config) await ingestConfigOrder(ctx);
   const orderId = await orderSourceRepository.link(group, message);
   if (!orderId) return;
-  const photos = await orderSourceRepository.pending(orderId);
-  await Promise.all(photos.map((photo) => ensurePhoto(photo, bot.telegram).catch(() => {
-    console.error("Foto sumber order belum tersimpan; akan dicoba lagi saat dibuka.");
-  })));
+  // File references are durable. Download photos through the authorized API when opened.
   realtimeService.emitOrdersChanged();
 }
 
@@ -298,7 +365,7 @@ async function sendConversationReply({ orderId, replyId, userId, target, content
   if (!bot) throw Object.assign(new Error("Bot Telegram tidak tersedia"), { statusCode: 503 });
   const chatId = target.chat_id;
   const threadId = Number(target.thread_id);
-  return queueOrderMessage(chatId, threadId, async () => {
+  return queueOutgoingMessage(chatId, threadId, () => trackOutgoingReceipt(chatId, threadId, async () => {
     const currentTarget = await conversationRepository.findReplyTarget(orderId, replyId, userId);
     if (!currentTarget) {
       throw Object.assign(new Error("Pesan tujuan atau akses order sudah berubah."), { statusCode: 409 });
@@ -340,7 +407,7 @@ async function sendConversationReply({ orderId, replyId, userId, target, content
       console.error("Balasan terkirim tetapi riwayat Telegram gagal dimuat:", error.message);
       return { warning: "Balasan terkirim ke Telegram, tetapi riwayat belum dapat diperbarui." };
     }
-  });
+  }));
 }
 
 async function ingestOrderReply(ctx) {
@@ -357,10 +424,18 @@ async function ingestOrderReply(ctx) {
   const group = await telegramRepository.getGroupByChatThread(chatId, threadId);
   if (!group?.is_active || !["PENGAWALAN", "LOGIC"].includes(group.category)) return false;
 
-  const parent = await conversationRepository.findParent({
+  const lookup = {
     groupId: group.id, chatId, threadId,
     replyId: reply?.message_id, albumId: message.media_group_id,
-  });
+  };
+  let parent = await conversationRepository.findParent(lookup);
+  // Telegram can deliver a user's reply before our send response has been recorded.
+  // Wait only for that active send; new orders use their own incoming queue.
+  const receipt = reply && outgoingReceipts.get(`${chatId}:${threadId || 0}`);
+  if (!parent && receipt) {
+    await receipt.catch(() => {});
+    parent = await conversationRepository.findParent(lookup);
+  }
   const sender = message.sender_chat?.title || [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ")
     || message.from?.username || "Pengirim Telegram";
   const entry = { chatId, threadId, message, sender: sender.slice(0, 255), content: content || null, media };
@@ -383,20 +458,50 @@ async function ingestOrderReply(ctx) {
   const excerpt = (message.quote?.text || reply?.text || reply?.caption
     || parent.reply_excerpt || "Lampiran Telegram").trim().slice(0, 300);
   await conversationRepository.recordReply({ ...entry, parent, excerpt });
-  if (albumKey) pendingReplyAlbums.delete(albumKey);
   for (const sibling of album?.entries.values() || []) {
     await conversationRepository.recordReply({ ...sibling, parent, excerpt });
   }
+  if (albumKey) pendingReplyAlbums.delete(albumKey);
   realtimeService.emitOrdersChanged();
   return true;
 }
 
-async function handleOrderMessage(ctx, ingest) {
+async function handleOrderMessage(ctx, ingest, replyOnly = false) {
   if (!isGroupChat(ctx.chat)) return;
+  const receivedAt = Date.now();
+  const text = ctx.message?.text || ctx.message?.caption || "";
+  const orderMessage = Boolean(parseIncomingOrder(text.trim()) || parseConfigOrder(text.trim()));
+  if (orderMessage) console.log("Order Telegram diterima", {
+    chat_id: ctx.chat.id, message_id: ctx.message.message_id, at: new Date(receivedAt).toISOString(),
+    telegram_delay_ms: ctx.message.date ? Math.max(0, receivedAt - ctx.message.date * 1000) : null,
+  });
   try {
-    await queueOrderMessage(ctx.chat.id, getThreadId(ctx.message), ingest);
+    const queues = replyOnly ? replyMessageQueues : orderMessageQueues;
+    await queueTelegramWork(queues, ctx.chat.id, getThreadId(ctx.message), async () => {
+      const startedAt = Date.now();
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await ingest();
+          break;
+        } catch (error) {
+          const retryDelay = INCOMING_DATABASE_RETRY_DELAYS[attempt];
+          if (!TRANSIENT_DATABASE_ERRORS.has(error.code) || retryDelay === undefined) throw error;
+          console.warn("Mengulang pencatatan pesan Telegram", {
+            chat_id: ctx.chat.id, message_id: ctx.message.message_id, code: error.code, retry: attempt + 1,
+          });
+          await delay(retryDelay);
+        }
+      }
+      if (orderMessage) console.log("Pemrosesan order Telegram selesai", {
+        chat_id: ctx.chat.id, message_id: ctx.message.message_id,
+        queue_ms: startedAt - receivedAt, processing_ms: Date.now() - startedAt,
+      });
+    });
   } catch (error) {
-    console.error("Pesan order Telegram gagal diproses:", error.message);
+    console.error("Pesan order Telegram gagal diproses:", {
+      chat_id: ctx.chat.id, message_id: ctx.message?.message_id,
+      code: error.code, error: error.message, at: new Date().toISOString(),
+    });
   }
 }
 
@@ -531,6 +636,10 @@ async function configureGroup(ctx, cityId, segmentId, category, workflow) {
 }
 
 function registerHandlers() {
+  bot.use((ctx, next) => {
+    limitTelegramRequests(ctx.telegram);
+    return next();
+  });
   bot.command("setgrup", async (ctx) => { try { await handleSetGroup(ctx); } catch (error) { console.error("/setgrup gagal:", error.message); } });
   bot.command("help", async (ctx) => { try { await ctx.reply(helpMessage(), threadOptions(ctx.message)); } catch (error) { console.error("/help gagal:", error.message); } });
   bot.command("alarmnodeb", async (ctx) => { try { await handleAlarmRegistration(ctx, "nodeb"); } catch (error) { console.error("/alarmnodeb gagal:", error.message); await ctx.reply(`⚠️ ${error.message}`, threadOptions(ctx.message)); } });
@@ -539,15 +648,18 @@ function registerHandlers() {
   bot.command("stopalarmdatin", async (ctx) => { try { await handleAlarmUnsubscribe(ctx, "datin"); } catch (error) { console.error("/stopalarmdatin gagal:", error.message); await ctx.reply(`⚠️ ${error.message}`); } });
   bot.command("alarmstatus", async (ctx) => { try { await handleAlarmStatus(ctx); } catch (error) { console.error("/alarmstatus gagal:", error.message); await ctx.reply(`⚠️ ${error.message}`); } });
   bot.command("config", (ctx) => handleOrderMessage(ctx, () => ingestConfigOrder(ctx)));
-  bot.on("text", (ctx) => handleOrderMessage(ctx, () =>
-    parseIncomingOrder(ctx.message.text.trim()) ? ingestIncomingOrder(ctx) : ingestOrderReply(ctx)));
-  bot.on("photo", (ctx) => handleOrderMessage(ctx, async () => {
+  bot.on("text", (ctx) => {
+    const order = Boolean(parseIncomingOrder(ctx.message.text.trim()));
+    return handleOrderMessage(ctx, () => order ? ingestIncomingOrder(ctx) : ingestOrderReply(ctx), !order);
+  });
+  bot.on("photo", (ctx) => {
     const caption = ctx.message.caption?.trim() || "";
-    if (parseIncomingOrder(caption) || parseConfigOrder(caption) || !(await ingestOrderReply(ctx))) {
-      await ingestPhotoOrder(ctx);
-    }
-  }));
-  bot.on("message", (ctx) => handleOrderMessage(ctx, () => ingestOrderReply(ctx)));
+    const order = Boolean(parseIncomingOrder(caption) || parseConfigOrder(caption));
+    return handleOrderMessage(ctx, async () => {
+      if (order || !(await ingestOrderReply(ctx))) await ingestPhotoOrder(ctx);
+    }, !order);
+  });
+  bot.on("message", (ctx) => handleOrderMessage(ctx, () => ingestOrderReply(ctx), true));
   bot.action(/^setgroup:city:(\d+)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; const segments = await telegramRepository.getSegments(); await ctx.editMessageText("Konfigurasi grup order\n\n2/4 — Pilih segmen:", segmentKeyboard(ctx.match[1], segments)); await ctx.answerCbQuery(); });
   bot.action(/^setgroup:segment:(\d+):(\d+)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await ctx.editMessageText("Konfigurasi grup order\n\n3/4 — Pilih alur kerja:", workflowKeyboard(ctx.match[1], ctx.match[2])); await ctx.answerCbQuery(); });
   bot.action(/^setgroup:flow:(\d+):(\d+):([AP])$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await ctx.editMessageText("Konfigurasi grup order\n\n4/4 — Pilih jenis grup:", categoryKeyboard(ctx.match[1], ctx.match[2], ctx.match[3])); await ctx.answerCbQuery(); });
@@ -574,12 +686,14 @@ function registerHandlers() {
 async function notifyOrderClaim(claim) {
   if (!bot || !claim.telegram_chat_id || !claim.telegram_message_id) return;
   try {
-    await queueOrderMessage(claim.telegram_chat_id, claim.telegram_thread_id, async () => {
-      const message = await bot.telegram.sendMessage(claim.telegram_chat_id, `🟡 On progress oleh ${claim.user_name}`, {
-        ...(claim.telegram_thread_id ? { message_thread_id: claim.telegram_thread_id } : {}),
-        reply_to_message_id: claim.telegram_message_id,
+    await queueOutgoingMessage(claim.telegram_chat_id, claim.telegram_thread_id, async () => {
+      await trackOutgoingReceipt(claim.telegram_chat_id, claim.telegram_thread_id, async () => {
+        const message = await bot.telegram.sendMessage(claim.telegram_chat_id, `🟡 On progress oleh ${claim.user_name}`, {
+          ...(claim.telegram_thread_id ? { message_thread_id: claim.telegram_thread_id } : {}),
+          reply_to_message_id: claim.telegram_message_id,
+        });
+        await rememberOutgoing(claim.order_id, claim.telegram_chat_id, claim.telegram_thread_id, [message.message_id], "claim");
       });
-      await rememberOutgoing(claim.order_id, claim.telegram_chat_id, claim.telegram_thread_id, [message.message_id], "claim");
     });
   }
   catch (error) { console.error("Notifikasi claim Telegram gagal:", error.message); }
@@ -592,6 +706,16 @@ async function rememberOutgoing(orderId, chatId, threadId, messageIds, kind) {
   } catch (error) {
     console.error("ID pesan Telegram tidak dapat dicatat:", error.message);
   }
+}
+
+async function sendRecordedResult(notification, send) {
+  return trackOutgoingReceipt(notification.chat_id, notification.thread_id, async () => {
+    const result = await send();
+    const messages = Array.isArray(result) ? result : [result];
+    await rememberOutgoing(notification.order_id, notification.chat_id, notification.thread_id,
+      messages.map((message) => message.message_id), "result");
+    return result;
+  });
 }
 
 function replyOptions(notification) {
@@ -611,11 +735,11 @@ async function sendResultFiles(notification, options, caption) {
   const allDocuments = files.every((file) => !file.mime_type?.startsWith("image/"));
   if (files.length >= 2 && files.length <= 10 && files.every((file) => file.local_path) && (allPhotos || allDocuments)) {
     try {
-      const messages = await bot.telegram.sendMediaGroup(notification.chat_id, files.map((file, index) => ({
+      const messages = await sendRecordedResult(notification, () => bot.telegram.sendMediaGroup(notification.chat_id, files.map((file, index) => ({
         type: allPhotos ? "photo" : "document",
         media: { source: file.local_path, filename: file.file_name },
         ...(index === 0 && caption ? { caption } : {}),
-      })), options);
+      })), options));
       return { deliveries: messages.map((message) => message.message_id), errors };
     } catch (error) {
       // Do not retry as separate messages: an ambiguous API failure could duplicate an album.
@@ -633,9 +757,9 @@ async function sendResultFiles(notification, options, caption) {
     try {
       const filePayload = { source: file.local_path, filename: file.file_name };
       const fileOptions = { ...options, ...(index === 0 && caption ? { caption } : {}) };
-      const message = file.mime_type?.startsWith("image/")
-        ? await bot.telegram.sendPhoto(notification.chat_id, filePayload, fileOptions)
-        : await bot.telegram.sendDocument(notification.chat_id, filePayload, fileOptions);
+      const message = await sendRecordedResult(notification, () => file.mime_type?.startsWith("image/")
+        ? bot.telegram.sendPhoto(notification.chat_id, filePayload, fileOptions)
+        : bot.telegram.sendDocument(notification.chat_id, filePayload, fileOptions));
       deliveries.push(message.message_id);
     } catch (error) {
       console.error("Pengiriman lampiran Telegram gagal:", error.message);
@@ -650,7 +774,7 @@ async function notifyOrderResult(notification) {
   if (!bot || !notification?.chat_id) {
     return { delivered: false, message_id: null, error: "Bot atau tujuan Telegram tidak tersedia" };
   }
-  return queueOrderMessage(notification.chat_id, notification.thread_id, () => deliverOrderResult(notification));
+  return queueOutgoingMessage(notification.chat_id, notification.thread_id, () => deliverOrderResult(notification));
 }
 
 async function deliverOrderResult(notification) {
@@ -662,11 +786,11 @@ async function deliverOrderResult(notification) {
   const useCaption = hasFiles && content && content.length <= 1024;
 
   if (content && !useCaption) try {
-    const message = await bot.telegram.sendMessage(
+    const message = await sendRecordedResult(notification, () => bot.telegram.sendMessage(
       notification.chat_id,
       content,
       options,
-    );
+    ));
     deliveries.push(message.message_id);
   } catch (error) {
     console.error("Pengiriman result Telegram gagal:", error.message);
@@ -676,7 +800,6 @@ async function deliverOrderResult(notification) {
   const fileDelivery = await sendResultFiles(notification, options, useCaption ? content : undefined);
   deliveries.push(...fileDelivery.deliveries);
   errors.push(...fileDelivery.errors);
-  await rememberOutgoing(notification.order_id, notification.chat_id, notification.thread_id, deliveries, "result");
 
   return {
     delivered: deliveries.length > 0 && errors.length === 0,

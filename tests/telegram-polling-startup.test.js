@@ -6,16 +6,18 @@ const vm = require("node:vm");
 
 const source = fs.readFileSync(path.join(__dirname, "../src/services/telegram.service.js"), "utf8");
 
-function fixture({ callApi, wait = async () => {}, poll = async () => {}, stop = () => {} }) {
+function fixture({ callApi, wait = async () => {}, poll = async () => {}, stop = () => {}, timers = { setTimeout, clearTimeout } }) {
   const state = { registrations: 0, starts: 0, stops: 0, delays: [], logs: [] };
   const dependencies = {
     telegraf: {
       Telegraf: class {
         telegram = { callApi };
+        constructor() { state.client = this.telegram; }
         command() { state.registrations += 1; }
         on() {}
         action() {}
         catch() {}
+        use() {}
         startPolling() { state.starts += 1; return poll(); }
         stop() { state.stops += 1; stop(); }
       },
@@ -33,6 +35,7 @@ function fixture({ callApi, wait = async () => {}, poll = async () => {}, stop =
     require: (name) => dependencies[name] || {},
     process: { env: { TELEGRAM_BOT_TOKEN: "test-only" } },
     AbortController, AbortSignal,
+    ...timers,
     console: { log, warn: log, error: log },
   };
   vm.runInNewContext(source, context);
@@ -123,4 +126,40 @@ test("a polling conflict reports 409 and does not retry", async () => {
   assert.equal(state.starts, 1);
   assert.deepEqual(state.delays, []);
   assert.match(state.logs.at(-1), /409/);
+});
+
+test("Telegram deadlines abort real requests and remain retryable for polling", async () => {
+  const pending = new Map();
+  let nextTimer = 0;
+  const { state } = fixture({
+    callApi: async (method, payload, { signal }) => new Promise((resolve, reject) => {
+      signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true });
+    }),
+    timers: {
+      setTimeout(callback, milliseconds) { const id = ++nextTimer; pending.set(id, { callback, milliseconds }); return id; },
+      clearTimeout(id) { pending.delete(id); },
+    },
+  });
+
+  for (const [method, timeout] of [["sendDocument", 20000], ["getUpdates", 65000]]) {
+    const request = state.client.callApi(method, {});
+    const timer = [...pending.values()][0];
+    assert.equal(timer.milliseconds, timeout);
+    timer.callback();
+    await assert.rejects(request, { name: "FetchError", code: "ETIMEDOUT" });
+    assert.equal(pending.size, 0);
+  }
+});
+
+test("Telegram polling preserves cancellation from Telegraf's AbortController shim", async () => {
+  const { AbortController: ShimController } = require("abort-controller");
+  const { state } = fixture({
+    callApi: async (method, payload, { signal }) => new Promise((resolve, reject) => {
+      signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true });
+    }),
+  });
+  const controller = new ShimController();
+  const request = state.client.callApi("getUpdates", {}, controller);
+  controller.abort();
+  await assert.rejects(request, { name: "AbortError" });
 });

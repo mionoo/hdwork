@@ -5,7 +5,7 @@ const vm = require("node:vm");
 const path = require("node:path");
 
 function load(file, dependencies, env = {}) {
-  const context = { module: { exports: {} }, require: (name) => dependencies[name] || {}, process: { env }, console, setTimeout, AbortController, AbortSignal };
+  const context = { module: { exports: {} }, require: (name) => dependencies[name] || {}, process: { env }, console, setTimeout, clearTimeout, AbortController, AbortSignal };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", file), "utf8"), context);
   return context.module.exports;
 }
@@ -20,7 +20,7 @@ async function botFixture(admin = true) {
           this.telegram = { callApi: async () => ({}), getChatMember: async () => ({ status: admin ? "administrator" : "member" }) };
         }
         action(pattern, handler) { actions.push({ pattern, handler }); }
-        command() {} on() {} catch() {} async startPolling() {}
+        command() {} on() {} catch() {} use() {} async startPolling() {}
       },
     },
     "../repositories/telegram.repository": {

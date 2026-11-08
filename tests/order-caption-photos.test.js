@@ -5,7 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 function load(file, dependencies) {
-  const sandbox = { module: { exports: {} }, console, setTimeout, AbortController, AbortSignal, process: { env: { TELEGRAM_BOT_TOKEN: "test-only" } }, require: (name) => dependencies[name] || {} };
+  const sandbox = { module: { exports: {} }, console, setTimeout, clearTimeout, AbortController, AbortSignal, process: { env: { TELEGRAM_BOT_TOKEN: "test-only" } }, require: (name) => dependencies[name] || {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", file), "utf8"), sandbox);
   return sandbox.module.exports;
 }
@@ -13,9 +13,13 @@ function load(file, dependencies) {
 async function fixture(category = "PENGAWALAN", active = true, conversation = { findParent: async () => null }) {
   const handlers = {}, created = [], photos = new Map(), downloads = [];
   let order = null;
+  let telegram;
   const service = load("src/services/telegram.service.js", {
     telegraf: { Telegraf: class {
-      constructor() { this.telegram = { callApi: async () => ({}), sendMessage: async () => ({ message_id: 4 }) }; } command() {} action() {} catch() {}
+      constructor() {
+        this.telegram = { callApi: async () => ({}), sendMessage: async () => ({ message_id: 4 }) };
+        telegram = this.telegram;
+      } command() {} action() {} catch() {} use() {}
       on(type, handler) { handlers[type] = handler; } async startPolling() {}
     } },
     "../repositories/telegram.repository": { getGroupByChatThread: async () => ({ id: 8, category, is_active: active }) },
@@ -47,7 +51,7 @@ async function fixture(category = "PENGAWALAN", active = true, conversation = { 
     chat: { id: -100, type: "supergroup" },
     message: { chat: { id: -100 }, date: 1700000000, is_topic_message: true, message_thread_id: 7, ...message },
   });
-  return { send, sendText, receive, service, created, downloads, photos };
+  return { send, sendText, receive, service, created, downloads, photos, telegram };
 }
 
 test("caption #req creates an order and keeps highest resolution photo", async () => {
@@ -56,7 +60,8 @@ test("caption #req creates an order and keeps highest resolution photo", async (
   assert.equal(f.created.length, 1);
   assert.equal(f.created[0].serviceNumber, "1523XXX");
   assert.equal(f.created[0].message.caption, "#req 1523XXX, embassy");
-  assert.equal(f.downloads[0].file_id, "large");
+  assert.equal(f.photos.get(1).file_id, "large");
+  assert.equal(f.downloads.length, 0);
 });
 
 test("multiline #req keeps the full description in group text and photo captions", async () => {
@@ -83,8 +88,9 @@ test("album members before/after caption attach to one order, including duplicat
   await f.send("#req 123, test", { message_id: 2, media_group_id: "album" });
   assert.equal(f.created.length, 1);
   assert.equal(f.photos.size, 3);
-  assert.ok(f.downloads.some((item) => item.id === 1));
-  assert.ok(f.downloads.some((item) => item.id === 3));
+  assert.ok(f.photos.has(1));
+  assert.ok(f.photos.has(3));
+  assert.equal(f.downloads.length, 0);
 });
 
 test("plain photo without order caption is ignored", async () => {
@@ -131,6 +137,40 @@ test("Telegram reply chain links outgoing anchors and earlier album members to o
   assert.equal(rows[1].content, "bukti");
   assert.equal(rows[2].media.kind, "video");
   assert.equal(rows[2].excerpt, "ralat");
+});
+
+test("a reply awaiting its outgoing anchor does not hold a new order in the same group", { timeout: 1000 }, async () => {
+  const anchors = new Map();
+  const replies = [];
+  const f = await fixture("PENGAWALAN", true, {
+    findParent: async ({ replyId }) => anchors.get(replyId),
+    recordReply: async (entry) => replies.push(entry),
+    recordOutgoing: async ({ orderId, messageIds }) => {
+      for (const id of messageIds) anchors.set(id, { order_id: orderId, reply_to_message_id: id });
+    },
+  });
+  let release;
+  let markStarted;
+  const started = new Promise((resolve) => { markStarted = resolve; });
+  f.telegram.sendMessage = () => new Promise((resolve) => {
+    release = () => resolve({ message_id: 4 });
+    markStarted();
+  });
+  const claim = f.service.notifyOrderClaim({
+    order_id: 10, telegram_chat_id: -100, telegram_thread_id: 7, telegram_message_id: 1, user_name: "HD",
+  });
+  await started;
+  const reply = f.receive("text", { message_id: 5, text: "ralat", reply_to_message: { message_id: 4, text: "On progress" } });
+  try {
+    await f.receive("text", { message_id: 6, text: "#req 456, order baru" });
+    assert.equal(f.created[0].message.message_id, 6);
+    assert.equal(replies.length, 0);
+  } finally {
+    release();
+    await Promise.all([claim, reply]);
+  }
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].parent.order_id, 10);
 });
 
 test("conversation media refuses unauthorized requests before file lookup", async () => {
