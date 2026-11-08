@@ -81,6 +81,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
   const [loadError, setLoadError] = useState("")
 
   const [successMessage, setSuccessMessage] = useState("")
+  const [deliveryWarning, setDeliveryWarning] = useState("")
 
   const [claimingOrderId, setClaimingOrderId] = useState<number | null>(null)
 
@@ -261,9 +262,11 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
     try {
       setQuickActionLoading(true)
       setQuickResultError("")
-      await sendResult(token, quickResultOrder.id, quickResultContent.trim(), quickResultFiles)
+      const result = await sendResult(token, quickResultOrder.id, quickResultContent.trim(), quickResultFiles)
       setQuickResultOrder(null)
-      setSuccessMessage(`Result order #${quickResultOrder.id} berhasil dikirim`)
+      setDeliveryWarning(result.telegram_delivery?.delivered === false
+        ? `Hasil order #${quickResultOrder.id} tersimpan, tetapi pengiriman ke Telegram belum terkonfirmasi. Periksa grup sebelum mengirim ulang.` : "")
+      setSuccessMessage(result.telegram_delivery?.delivered === false ? "" : result.message || `Result order #${quickResultOrder.id} berhasil dikirim`)
       await loadOrders()
     } catch (error) {
       setQuickResultError(error instanceof Error ? error.message : "Gagal mengirim result")
@@ -300,12 +303,14 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
     try {
       setQuickActionLoading(true)
       setQuickCompleteError("")
-      await completeOrder(token, quickCompleteOrder.id, needsResult ? quickCompleteContent.trim() : "", needsResult ? quickCompleteFiles : [])
+      const result = await completeOrder(token, quickCompleteOrder.id, needsResult ? quickCompleteContent.trim() : "", needsResult ? quickCompleteFiles : [])
       setQuickCompleteOrder(null)
       setQuickCompleteDetail(null)
       setSelectedMessage(null)
       setSelectedOrder(null)
-      setSuccessMessage(`Order #${quickCompleteOrder.id} berhasil diselesaikan`)
+      setDeliveryWarning(result.telegram_delivery?.result?.delivered === false
+        ? `Order #${quickCompleteOrder.id} sudah selesai, tetapi pengiriman hasil ke Telegram belum terkonfirmasi. Periksa grup sebelum mengirim ulang.` : "")
+      setSuccessMessage(result.telegram_delivery?.result?.delivered === false ? "" : result.message || `Order #${quickCompleteOrder.id} berhasil diselesaikan`)
       await loadOrders()
     } catch (error) {
       setQuickCompleteError(error instanceof Error ? error.message : "Gagal menyelesaikan order")
@@ -355,6 +360,12 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
         {successMessage && (
           <p className="rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-400">
             {successMessage}
+          </p>
+        )}
+
+        {deliveryWarning && (
+          <p role="alert" className="rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">
+            {deliveryWarning}
           </p>
         )}
 

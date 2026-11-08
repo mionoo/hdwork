@@ -52,6 +52,7 @@ export default function OrderDetailPage() {
   const [loading, setLoading] = useState(true);
 
   const [error, setError] = useState("");
+  const [deliveryWarning, setDeliveryWarning] = useState("");
 
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -312,7 +313,9 @@ export default function OrderDetailPage() {
       setActionLoading(true);
       setResultError("");
 
-      await sendResult(token, Number(id), resultContent.trim(), resultFiles);
+      const result = await sendResult(token, Number(id), resultContent.trim(), resultFiles);
+      setDeliveryWarning(result.telegram_delivery?.delivered === false
+        ? "Hasil tersimpan, tetapi pengiriman ke Telegram belum terkonfirmasi. Periksa grup sebelum mengirim ulang." : "");
 
       setIsResultDialogOpen(false);
       await loadDetail();
@@ -376,13 +379,15 @@ export default function OrderDetailPage() {
       setActionLoading(true);
       setCompleteError("");
 
-      await completeOrder(
+      const result = await completeOrder(
         token,
         Number(id),
         needsResult ? completeContent.trim() : "",
         needsResult ? completeFiles : [],
       );
 
+      setDeliveryWarning(result.telegram_delivery?.result?.delivered === false
+        ? "Order sudah selesai, tetapi pengiriman hasil ke Telegram belum terkonfirmasi. Periksa grup sebelum mengirim ulang." : "");
       setIsCompleteDialogOpen(false);
       await loadDetail();
     } catch (error) {
@@ -469,6 +474,12 @@ export default function OrderDetailPage() {
             Kembali
           </Button>
         </div>
+
+        {deliveryWarning && (
+          <p role="alert" className="rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">
+            {deliveryWarning}
+          </p>
+        )}
 
         <Card>
           <CardHeader>

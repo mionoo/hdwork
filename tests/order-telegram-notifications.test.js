@@ -8,7 +8,7 @@ function load(relativePath, dependencies, env = {}) {
   const context = {
     module: { exports: {} }, console, setTimeout,
     process: { env },
-    require: (name) => dependencies[name] || {},
+    require: (name) => dependencies[name] || (name.startsWith("node:") ? require(name) : {}),
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, relativePath), "utf8"), context);
   return context.module.exports;

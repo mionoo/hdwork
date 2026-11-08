@@ -22,8 +22,8 @@ test("real Telegraf polling accepts successive order batches while an outgoing f
   let commitAttempts = 0;
 
   class LocalBot extends Telegraf {
-    constructor(token) {
-      super(token);
+    constructor(token, options) {
+      super(token, options);
       this.telegram.callApi = async (method, payload, { signal } = {}) => {
         if (method === "getMe") return { id: 100, username: "hdwork_test", is_bot: true };
         if (method === "deleteWebhook") return true;
@@ -35,6 +35,8 @@ test("real Telegraf polling accepts successive order batches while an outgoing f
         }
         if (method === "getUpdates") {
           if (payload.limit === 1) return [];
+          assert.equal(payload.timeout, 10);
+          assert.equal(this.telegram.options.agent.keepAlive, false);
           return new Promise((resolve, reject) => {
             waitingPoll = resolve;
             signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true });
@@ -77,7 +79,7 @@ test("real Telegraf polling accepts successive order batches while an outgoing f
   };
   const moduleObject = { exports: {} };
   new Function("require", "module", "process", fs.readFileSync(require.resolve("../src/services/telegram.service"), "utf8"))(
-    (name) => dependencies[name] || {}, moduleObject, { env: { TELEGRAM_BOT_TOKEN: "test-only" } },
+    (name) => dependencies[name] || (name.startsWith("node:") ? require(name) : {}), moduleObject, { env: { TELEGRAM_BOT_TOKEN: "test-only" } },
   );
   const service = moduleObject.exports;
   const polling = service.startPolling();

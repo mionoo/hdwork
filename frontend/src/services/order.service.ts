@@ -386,7 +386,7 @@ export async function sendResult(
     throw new Error(result.message || "Gagal menyimpan result")
   }
 
-  return result.data
+  return { ...result.data, message: result.message }
 }
 
 export async function completeOrder(
@@ -417,5 +417,5 @@ export async function completeOrder(
     throw new Error(result.message || "Gagal menyelesaikan order")
   }
 
-  return result.data
+  return { ...result.data, message: result.message }
 }

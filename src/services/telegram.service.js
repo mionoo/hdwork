@@ -1,5 +1,6 @@
 const { Markup, Telegraf } = require("telegraf");
 const { setTimeout: delay } = require("node:timers/promises");
+const { Agent } = require("node:https");
 const telegramRepository = require("../repositories/telegram.repository");
 const orderRepository = require("../repositories/order.repository");
 const realtimeService = require("../services/realtime.service");
@@ -13,7 +14,9 @@ function positiveInteger(value, fallback) {
 }
 
 const bot = process.env.TELEGRAM_BOT_TOKEN
-  ? new Telegraf(process.env.TELEGRAM_BOT_TOKEN)
+  ? new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
+    telegram: { agent: new Agent({ keepAlive: false }) },
+  })
   : null;
 const PERSONAL_ALARM_RATE_PER_SECOND = positiveInteger(process.env.TELEGRAM_PERSONAL_ALARM_RATE_PER_SECOND, 25);
 const PERSONAL_ALARM_RETRY_LIMIT = positiveInteger(process.env.TELEGRAM_PERSONAL_ALARM_RETRY_LIMIT, 3);
@@ -22,7 +25,8 @@ const DATIN_INSTITUTIONS_PER_PAGE = 8;
 const POLLING_RETRY_DELAYS = [2000, 4000, 8000, 16000, 30000];
 const POLLING_REQUEST_TIMEOUT_MS = 10000;
 const TELEGRAM_REQUEST_TIMEOUT_MS = 20000;
-const TELEGRAM_POLL_TIMEOUT_MS = 65000;
+const TELEGRAM_POLL_SECONDS = Math.min(50, positiveInteger(process.env.TELEGRAM_POLL_SECONDS, 10));
+const TELEGRAM_POLL_TIMEOUT_MS = (TELEGRAM_POLL_SECONDS + 15) * 1000;
 const INCOMING_DATABASE_RETRY_DELAYS = [200, 500, 1000];
 const TRANSIENT_DATABASE_ERRORS = new Set([
   "ER_LOCK_DEADLOCK", "ER_LOCK_WAIT_TIMEOUT", "ECONNRESET", "ETIMEDOUT",
@@ -32,6 +36,8 @@ let handlersRegistered = false;
 let pollingTask;
 let pollingController;
 let pollingActive = false;
+let lastPollingTimeoutAt = 0;
+let previousPollFinishedAt = 0;
 let personalAlarmQueue = Promise.resolve();
 let nextPersonalAlarmAt = 0;
 const orderMessageQueues = new Map();
@@ -87,24 +93,39 @@ function limitTelegramRequests(telegram) {
   limitedTelegramClients.add(telegram);
   const callApi = telegram.callApi.bind(telegram);
   telegram.callApi = async (method, payload, options = {}) => {
+    const longPolling = method === "getUpdates" && Number(payload.timeout) > 0;
+    const startedAt = Date.now();
+    const gap = previousPollFinishedAt ? startedAt - previousPollFinishedAt : 0;
+    if (longPolling && gap > 1000) console.warn("Jeda sebelum polling Telegram", { gap_ms: gap });
+    const requestPayload = longPolling ? { ...payload, timeout: TELEGRAM_POLL_SECONDS } : payload;
     const controller = new AbortController();
     const stop = () => controller.abort();
     const signal = options.signal;
     if (signal?.aborted) stop();
     else signal?.addEventListener("abort", stop, { once: true });
-    const timeoutMs = method === "getUpdates" ? TELEGRAM_POLL_TIMEOUT_MS : TELEGRAM_REQUEST_TIMEOUT_MS;
+    const timeoutMs = longPolling ? TELEGRAM_POLL_TIMEOUT_MS : TELEGRAM_REQUEST_TIMEOUT_MS;
     let timedOut = false;
     const timeout = setTimeout(() => { timedOut = true; stop(); }, timeoutMs);
     try {
-      return await callApi(method, payload, { ...options, signal: controller.signal });
+      const response = await callApi(method, requestPayload, { ...options, signal: controller.signal });
+      if (longPolling) {
+        lastPollingTimeoutAt = 0;
+        if (response.length) console.log("Batch Telegram diterima", {
+          updates: response.length, request_ms: Date.now() - startedAt,
+          poll_gap_ms: gap, at: new Date().toISOString(),
+        });
+      }
+      return response;
     } catch (error) {
       if (!timedOut) throw error;
+      if (longPolling) lastPollingTimeoutAt = Date.now();
       console.warn("Permintaan Telegram melewati batas waktu", { method, timeout_ms: timeoutMs });
       // Telegraf treats AbortError as a deliberate polling stop. Timeouts must retry instead.
       throw Object.assign(new Error(`Permintaan Telegram ${method} melewati batas waktu.`), { name: "FetchError", code: "ETIMEDOUT" });
     } finally {
       clearTimeout(timeout);
       signal?.removeEventListener("abort", stop);
+      if (longPolling) previousPollFinishedAt = Date.now();
     }
   };
 }
@@ -881,7 +902,7 @@ async function runPolling(signal) {
       // Start that same loop after the abortable setup to avoid starting during shutdown.
       const polling = bot.startPolling();
       pollingActive = true;
-      console.log("🤖 Polling Telegram dimulai");
+      console.log(`🤖 Polling Telegram dimulai (timeout ${TELEGRAM_POLL_SECONDS} detik)`);
       try {
         await polling;
       } finally {
@@ -891,21 +912,24 @@ async function runPolling(signal) {
     } catch (error) {
       if (signal.aborted) return;
       const code = error.code;
-      if (code === 409) {
-        console.error("Polling Telegram dihentikan karena konflik 409. Periksa proses lain yang memakai token bot yang sama.");
+      const timeoutConflict = code === 409 && lastPollingTimeoutAt > 0
+        && Date.now() - lastPollingTimeoutAt < 120000;
+      if (code === 409 && !timeoutConflict) {
+        console.error("Polling Telegram dihentikan karena konflik 409. Periksa proses lain yang memakai token bot yang sama.", error.description || error.response?.description || "");
         return;
       }
 
       const retryDelay = POLLING_RETRY_DELAYS[attempt];
       const temporary = ["FetchError", "AbortError", "TimeoutError"].includes(error.name)
-        || code === 429 || (typeof code === "number" && code >= 500);
+        || timeoutConflict || code === 429 || (typeof code === "number" && code >= 500);
       if (!temporary || retryDelay === undefined) {
         console.error(`Polling Telegram gagal setelah ${attempt + 1} percobaan: ${error.message}`);
         return;
       }
 
       const retryAfter = code === 429 ? Number(error.parameters?.retry_after) * 1000 || 0 : 0;
-      const waitMs = Math.max(retryDelay, retryAfter);
+      const conflictCooldown = timeoutConflict ? (TELEGRAM_POLL_SECONDS + 5) * 1000 : 0;
+      const waitMs = Math.max(retryDelay, retryAfter, conflictCooldown);
       console.warn(`Polling Telegram gagal: ${error.message}. Retry ${attempt + 1}/${POLLING_RETRY_DELAYS.length} dalam ${waitMs / 1000} detik.`);
       await delay(waitMs, undefined, { signal }).catch((error) => {
         if (!signal.aborted) throw error;

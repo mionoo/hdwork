@@ -32,7 +32,7 @@ function fixture({ callApi, wait = async () => {}, poll = async () => {}, stop =
   const log = (message) => state.logs.push(message);
   const context = {
     module: { exports: {} },
-    require: (name) => dependencies[name] || {},
+    require: (name) => dependencies[name] || (name.startsWith("node:") ? require(name) : {}),
     process: { env: { TELEGRAM_BOT_TOKEN: "test-only" } },
     AbortController, AbortSignal,
     ...timers,
@@ -141,8 +141,8 @@ test("Telegram deadlines abort real requests and remain retryable for polling", 
     },
   });
 
-  for (const [method, timeout] of [["sendDocument", 20000], ["getUpdates", 65000]]) {
-    const request = state.client.callApi(method, {});
+  for (const [method, timeout] of [["sendDocument", 20000], ["getUpdates", 25000]]) {
+    const request = state.client.callApi(method, method === "getUpdates" ? { timeout: 50 } : {});
     const timer = [...pending.values()][0];
     assert.equal(timer.milliseconds, timeout);
     timer.callback();
@@ -162,4 +162,48 @@ test("Telegram polling preserves cancellation from Telegraf's AbortController sh
   const request = state.client.callApi("getUpdates", {}, controller);
   controller.abort();
   await assert.rejects(request, { name: "AbortError" });
+});
+
+test("shorter long polling preserves offsets and leaves shutdown synchronization unchanged", async () => {
+  const calls = [];
+  const { state } = fixture({
+    callApi: async (method, payload) => { calls.push(payload); return []; },
+  });
+  await state.client.callApi("getUpdates", { offset: 123, timeout: 50, allowed_updates: ["message"] });
+  assert.equal(calls[0].timeout, 10);
+  assert.equal(calls[0].offset, 123);
+  assert.deepEqual(calls[0].allowed_updates, ["message"]);
+  await state.client.callApi("getUpdates", { offset: 124, limit: 1 });
+  assert.equal(calls[1].timeout, undefined);
+  assert.equal(calls[1].offset, 124);
+});
+
+test("409 following a request timeout gets bounded recovery with a cooldown", async () => {
+  for (const permanent of [false, true]) {
+    let fireTimeout;
+    let starts = 0;
+    const { service, state } = fixture({
+      callApi: async (method, payload, { signal }) => {
+        if (method !== "getUpdates") return {};
+        return new Promise((resolve, reject) => {
+          signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true });
+        });
+      },
+      poll: async () => {
+        starts += 1;
+        if (permanent || starts === 1) throw Object.assign(new Error("conflict"), { code: 409 });
+      },
+      timers: {
+        setTimeout(callback, milliseconds) { if (milliseconds === 25000) fireTimeout = callback; return 1; },
+        clearTimeout() {},
+      },
+    });
+    const expired = state.client.callApi("getUpdates", { timeout: 50 });
+    fireTimeout();
+    await assert.rejects(expired, { code: "ETIMEDOUT" });
+    await service.startPolling();
+    assert.equal(state.starts, permanent ? 6 : 2);
+    assert.equal(state.delays.length, permanent ? 5 : 1);
+    assert.equal(state.delays[0], 15000);
+  }
 });
