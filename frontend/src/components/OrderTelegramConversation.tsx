@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type FormEvent } from "react"
+import { useEffect, useId, useRef, useState, type ClipboardEvent, type FormEvent } from "react"
 import { Reply, ZoomIn, ZoomOut } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -111,9 +111,39 @@ function ReplyComposer({ message, sending, onSend, onCancel }: {
 }) {
   const id = useId()
   const input = useRef<HTMLTextAreaElement>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
   const [content, setContent] = useState("")
   const [file, setFile] = useState<File | null>(null)
   const [error, setError] = useState("")
+  const [preview, setPreview] = useState<string | null>(null)
+  useEffect(() => {
+    if (!file?.type.startsWith("image/")) { setPreview(null); return }
+    const url = URL.createObjectURL(file)
+    setPreview(url)
+    return () => URL.revokeObjectURL(url)
+  }, [file])
+
+  function selectFile(attachment: File | null) {
+    if (attachment && (!attachment.size || attachment.size > 10 * 1024 * 1024)) {
+      setError("Pilih file berisi data dengan ukuran maksimal 10 MB.")
+      return
+    }
+    setError("")
+    setFile(attachment)
+  }
+
+  function pasteAttachment(event: ClipboardEvent<HTMLFormElement>) {
+    const files = Array.from(event.clipboardData.files)
+    if (!files.length || sending) return
+    event.preventDefault()
+    if (files.length > 1) {
+      setError("Satu balasan hanya dapat memuat 1 lampiran. Salin satu file lalu tempel kembali.")
+      return
+    }
+    selectFile(files[0])
+    if (fileInput.current) fileInput.current.value = ""
+  }
+
   const maxLength = file ? 1024 : 4096
   useEffect(() => { input.current?.focus() }, [])
 
@@ -128,27 +158,30 @@ function ReplyComposer({ message, sending, onSend, onCancel }: {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-3 rounded-md border bg-muted/40 p-3">
+    <form onSubmit={submit} onPaste={pasteAttachment} className="space-y-3 rounded-md border bg-muted/40 p-3">
       <blockquote className="text-sm text-muted-foreground">
         <span className="block font-medium wrap-anywhere">Membalas {message.sender_name}</span>
         <span className="line-clamp-2 wrap-anywhere">{message.content || message.file_name || "Lampiran Telegram"}</span>
       </blockquote>
       <Textarea ref={input} aria-label="Tulis balasan" placeholder="Tulis balasan…" rows={3}
-        value={content} disabled={sending} onChange={(event) => setContent(event.target.value)} />
+        value={content} disabled={sending} aria-describedby={`${id}-paste-hint`} onChange={(event) => setContent(event.target.value)} />
+      <p id={`${id}-paste-hint`} className="text-xs text-muted-foreground">Tempel gambar atau file dari clipboard dengan Ctrl+V / ⌘V, atau pilih lampiran.</p>
       <div className="space-y-1">
         <label htmlFor={`${id}-file`} className="block text-xs font-medium">Lampiran opsional · 1 file, maks. 10 MB</label>
-        <input id={`${id}-file`} type="file" disabled={sending} className="block w-full min-w-0 text-sm file:mr-2 file:rounded-md file:border file:bg-background file:px-2 file:py-1"
+        <input ref={fileInput} id={`${id}-file`} type="file" disabled={sending} className="block w-full min-w-0 text-sm file:mr-2 file:rounded-md file:border file:bg-background file:px-2 file:py-1"
           onChange={(event) => {
-            const attachment = event.currentTarget.files?.[0] ?? null
-            if (attachment && (!attachment.size || attachment.size > 10 * 1024 * 1024)) {
-              event.currentTarget.value = ""
-              setFile(null)
-              setError("Pilih file berisi data dengan ukuran maksimal 10 MB.")
-              return
-            }
-            setError("")
-            setFile(attachment)
+            selectFile(event.currentTarget.files?.[0] ?? null)
+            event.currentTarget.value = ""
           }} />
+        {file && (
+          <div className="space-y-2 pt-2">
+            {preview && <img src={preview} alt="Pratinjau lampiran balasan" className="max-h-40 max-w-full rounded-md object-contain" />}
+            <div className="flex flex-wrap items-center gap-2">
+              <span role="status" className="min-w-0 text-sm wrap-anywhere">{file.name} · {(file.size / 1024).toLocaleString("id-ID", { maximumFractionDigits: 1 })} KB</span>
+              <Button type="button" size="sm" variant="outline" disabled={sending} onClick={() => selectFile(null)}>Hapus lampiran</Button>
+            </div>
+          </div>
+        )}
       </div>
       {content.trim().length > maxLength && <p className="text-sm text-destructive">Balasan maksimal {maxLength} karakter.</p>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
