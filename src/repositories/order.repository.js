@@ -375,14 +375,20 @@ async function createIncomingOrder({
   valinId,
   metadata,
 }) {
-  const connection = await pool.getConnection();
+  const timings = {};
+  async function measure(phase, work) {
+    const start = Date.now();
+    try { return await work(); }
+    finally { timings[phase] = Date.now() - start; }
+  }
+  const connection = await measure("pool_wait_ms", () => pool.getConnection());
 
   try {
-    await connection.beginTransaction();
-    const [[currentGroup]] = await connection.query(
+    await measure("begin_ms", () => connection.beginTransaction());
+    const [[currentGroup]] = await measure("group_lock_ms", () => connection.query(
       "SELECT id FROM telegram_groups WHERE id = ? AND is_active = 1 AND archived_at IS NULL FOR UPDATE",
       [group.id],
-    );
+    ));
     if (!currentGroup) {
       await connection.commit();
       return null;
@@ -397,34 +403,29 @@ async function createIncomingOrder({
         return null;
       }
     }
-    const [types] = await connection.query(
-      "SELECT id, point_value FROM order_types WHERE code = ? AND is_active = 1 LIMIT 1",
-      [orderType],
-    );
-    if (!types[0]) {
-      const error = new Error(`Tipe order ${orderType} tidak tersedia`);
-      error.statusCode = 400;
-      throw error;
-    }
-    const [result] = await connection.query(
+    const [result] = await measure("insert_ms", () => connection.query(
       `
       INSERT INTO orders (
         ticket_number, service_number, description, raw_message, metadata,
         old_ont_serial, new_ont_serial, sto, valin_id,
         telegram_chat_id, telegram_message_id, telegram_user_id, telegram_username,
         telegram_group_id, order_type_id, point_value, telegram_media_group_id, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'WAITING')
+      ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ot.id, ot.point_value, ?, 'WAITING'
+        FROM order_types ot WHERE ot.code = ? AND ot.is_active = 1 LIMIT 1
       `,
       [
         ticketNumber || null, serviceNumber || null, description, message.text || message.caption || "",
         JSON.stringify(metadata || {}), oldOntSerial || null, newOntSerial || null,
         sto || null, valinId || null, message.chat.id, message.message_id,
         message.from?.id || null, message.from?.username || null, group.id,
-        types[0].id, types[0].point_value, message.media_group_id || null,
+        message.media_group_id || null, orderType,
       ],
-    );
-    await connection.commit();
-    return { id: Number(result.insertId) };
+    ));
+    if (!result.affectedRows) {
+      throw Object.assign(new Error(`Tipe order ${orderType} tidak tersedia`), { statusCode: 400 });
+    }
+    await measure("commit_ms", () => connection.commit());
+    return { id: Number(result.insertId), timings };
   } catch (error) {
     await connection.rollback();
     if (error.code === "ER_DUP_ENTRY") return null;

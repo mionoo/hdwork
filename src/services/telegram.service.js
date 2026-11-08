@@ -8,6 +8,13 @@ const orderSourceRepository = require("../repositories/order-source.repository")
 const conversationRepository = require("../repositories/order-conversation.repository");
 const { ensurePhoto, ensureTelegramFile } = require("./order-source-photo.service");
 
+function telegramErrorMessage(error) {
+  const message = String(error?.message || "Kesalahan Telegram");
+  const code = error?.cause?.code || error?.code;
+  return `${message}${code ? ` (${code})` : ""}`
+    .replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot[REDACTED]");
+}
+
 function positiveInteger(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
@@ -26,6 +33,7 @@ const POLLING_RETRY_DELAYS = [2000, 4000, 8000, 16000, 30000];
 const POLLING_REQUEST_TIMEOUT_MS = 10000;
 const TELEGRAM_REQUEST_TIMEOUT_MS = 20000;
 const TELEGRAM_POLL_SECONDS = Math.min(50, positiveInteger(process.env.TELEGRAM_POLL_SECONDS, 10));
+const TELEGRAM_DEBUG_LOGS = process.env.TELEGRAM_DEBUG_LOGS === "true";
 const TELEGRAM_POLL_TIMEOUT_MS = (TELEGRAM_POLL_SECONDS + 15) * 1000;
 const INCOMING_DATABASE_RETRY_DELAYS = [200, 500, 1000];
 const TRANSIENT_DATABASE_ERRORS = new Set([
@@ -96,7 +104,7 @@ function limitTelegramRequests(telegram) {
     const longPolling = method === "getUpdates" && Number(payload.timeout) > 0;
     const startedAt = Date.now();
     const gap = previousPollFinishedAt ? startedAt - previousPollFinishedAt : 0;
-    if (longPolling && gap > 1000) console.warn("Jeda sebelum polling Telegram", { gap_ms: gap });
+    if (TELEGRAM_DEBUG_LOGS && longPolling && gap > 1000) console.warn("Jeda sebelum polling Telegram", { gap_ms: gap });
     const requestPayload = longPolling ? { ...payload, timeout: TELEGRAM_POLL_SECONDS } : payload;
     const controller = new AbortController();
     const stop = () => controller.abort();
@@ -110,7 +118,7 @@ function limitTelegramRequests(telegram) {
       const response = await callApi(method, requestPayload, { ...options, signal: controller.signal });
       if (longPolling) {
         lastPollingTimeoutAt = 0;
-        if (response.length) console.log("Batch Telegram diterima", {
+        if (TELEGRAM_DEBUG_LOGS && response.length) console.log("Batch Telegram diterima", {
           updates: response.length, request_ms: Date.now() - startedAt,
           poll_gap_ms: gap, at: new Date().toISOString(),
         });
@@ -283,59 +291,42 @@ async function replyWrongOrderGroup(ctx, message) {
   void queueOutgoingMessage(ctx.chat.id, getThreadId(ctx.message), () => ctx.reply(message, {
     ...threadOptions(ctx.message), reply_to_message_id: ctx.message.message_id,
   })).catch((error) => {
-    console.error("Pemberitahuan format grup gagal dikirim:", error.message);
+    console.error("Pemberitahuan format grup gagal dikirim:", telegramErrorMessage(error));
   });
 }
 
-async function ingestIncomingOrder(ctx) {
+async function ingestParsedOrder(ctx, parsed, category, formatWarning, knownGroup) {
   const message = ctx.message;
-  const text = message?.text || message?.caption;
-  if (!isGroupChat(ctx.chat) || !text) return;
-  const parsed = parseIncomingOrder(text.trim());
-  if (!parsed) return;
-  const group = await telegramRepository.getGroupByChatThread(ctx.chat.id, getThreadId(message));
-  if (!group || !group.is_active) return;
-  if (group.category !== "PENGAWALAN") {
-    await replyWrongOrderGroup(
-      ctx,
-      "⚠️ Format #req / #assign hanya dapat dikirim di grup Pengawalan.",
-    );
+  const lookupAt = Date.now();
+  const group = knownGroup ?? await telegramRepository.getGroupByChatThread(ctx.chat.id, getThreadId(message));
+  ctx.orderMetrics = { group_lookup_ms: Date.now() - lookupAt };
+  if (!group?.is_active) return;
+  if (group.category !== category) {
+    await replyWrongOrderGroup(ctx, formatWarning);
     return;
   }
   const order = await orderRepository.createIncomingOrder({ group, message, ...parsed });
-  if (order) {
-    console.log("Order Telegram tersimpan", {
-      order_id: order.id, chat_id: ctx.chat.id, message_id: message.message_id,
-      at: new Date().toISOString(),
-    });
-  }
-  // A retry can find an order committed just before the database connection failed.
+  ctx.orderMetrics = { ...ctx.orderMetrics, ...order?.timings, order_id: order?.id ?? null };
+  // Emit even after an uncertain commit: a retry may find the order already saved.
   realtimeService.emitOrdersChanged();
 }
 
-async function ingestConfigOrder(ctx) {
-  const message = ctx.message;
-  const text = message?.text || message?.caption;
+async function ingestIncomingOrder(ctx, knownGroup) {
+  const text = ctx.message?.text || ctx.message?.caption;
+  if (!isGroupChat(ctx.chat) || !text) return;
+  const parsed = parseIncomingOrder(text.trim());
+  if (!parsed) return;
+  return ingestParsedOrder(ctx, parsed, "PENGAWALAN",
+    "⚠️ Format #req / #assign hanya dapat dikirim di grup Pengawalan.", knownGroup);
+}
+
+async function ingestConfigOrder(ctx, knownGroup) {
+  const text = ctx.message?.text || ctx.message?.caption;
   if (!isGroupChat(ctx.chat) || !text) return;
   const parsed = parseConfigOrder(text.trim());
   if (!parsed) return;
-  const group = await telegramRepository.getGroupByChatThread(ctx.chat.id, getThreadId(message));
-  if (!group || !group.is_active) return;
-  if (group.category !== "LOGIC") {
-    await replyWrongOrderGroup(
-      ctx,
-      "⚠️ Format /config hanya dapat dikirim di grup Logic.",
-    );
-    return;
-  }
-  const order = await orderRepository.createIncomingOrder({ group, message, ...parsed });
-  if (order) {
-    console.log("Order Telegram tersimpan", {
-      order_id: order.id, chat_id: ctx.chat.id, message_id: message.message_id,
-      at: new Date().toISOString(),
-    });
-  }
-  realtimeService.emitOrdersChanged();
+  return ingestParsedOrder(ctx, parsed, "LOGIC",
+    "⚠️ Format /config hanya dapat dikirim di grup Logic.", knownGroup);
 }
 
 async function ingestPhotoOrder(ctx) {
@@ -346,15 +337,18 @@ async function ingestPhotoOrder(ctx) {
   const config = parseConfigOrder(caption);
   // Captionless album members are retained until their caption arrives.
   if (!incoming && !config && !message.media_group_id) return;
+  const lookupAt = Date.now();
   const group = await telegramRepository.getGroupByChatThread(ctx.chat.id, getThreadId(message));
+  const groupLookupMs = Date.now() - lookupAt;
   if (!group?.is_active || !["PENGAWALAN", "LOGIC"].includes(group.category)) return;
   if ((incoming && group.category !== "PENGAWALAN") || (config && group.category !== "LOGIC")) {
     await replyWrongOrderGroup(ctx, "⚠️ Format caption tidak sesuai jenis grup. #req/#assign untuk Pengawalan; /config untuk Logic.");
     return;
   }
   await orderSourceRepository.record(group, message);
-  if (incoming) await ingestIncomingOrder(ctx);
-  else if (config) await ingestConfigOrder(ctx);
+  if (incoming) await ingestIncomingOrder(ctx, group);
+  else if (config) await ingestConfigOrder(ctx, group);
+  if (ctx.orderMetrics) ctx.orderMetrics.group_lookup_ms = groupLookupMs;
   const orderId = await orderSourceRepository.link(group, message);
   if (!orderId) return;
   // File references are durable. Download photos through the authorized API when opened.
@@ -425,7 +419,7 @@ async function sendConversationReply({ orderId, replyId, userId, target, content
       });
       return { replies: await conversationRepository.list(orderId) };
     } catch (error) {
-      console.error("Balasan terkirim tetapi riwayat Telegram gagal dimuat:", error.message);
+      console.error("Balasan terkirim tetapi riwayat Telegram gagal dimuat:", telegramErrorMessage(error));
       return { warning: "Balasan terkirim ke Telegram, tetapi riwayat belum dapat diperbarui." };
     }
   }));
@@ -492,10 +486,6 @@ async function handleOrderMessage(ctx, ingest, replyOnly = false) {
   const receivedAt = Date.now();
   const text = ctx.message?.text || ctx.message?.caption || "";
   const orderMessage = Boolean(parseIncomingOrder(text.trim()) || parseConfigOrder(text.trim()));
-  if (orderMessage) console.log("Order Telegram diterima", {
-    chat_id: ctx.chat.id, message_id: ctx.message.message_id, at: new Date(receivedAt).toISOString(),
-    telegram_delay_ms: ctx.message.date ? Math.max(0, receivedAt - ctx.message.date * 1000) : null,
-  });
   try {
     const queues = replyOnly ? replyMessageQueues : orderMessageQueues;
     await queueTelegramWork(queues, ctx.chat.id, getThreadId(ctx.message), async () => {
@@ -513,15 +503,20 @@ async function handleOrderMessage(ctx, ingest, replyOnly = false) {
           await delay(retryDelay);
         }
       }
-      if (orderMessage) console.log("Pemrosesan order Telegram selesai", {
-        chat_id: ctx.chat.id, message_id: ctx.message.message_id,
-        queue_ms: startedAt - receivedAt, processing_ms: Date.now() - startedAt,
-      });
+      if (orderMessage) {
+        const metrics = {
+          at: new Date().toISOString(), chat_id: ctx.chat.id, message_id: ctx.message.message_id,
+          ...ctx.orderMetrics,
+          telegram_delay_ms: ctx.message.date ? Math.max(0, receivedAt - ctx.message.date * 1000) : null,
+          queue_ms: startedAt - receivedAt, processing_ms: Date.now() - startedAt,
+        };
+        console.log(`Order Telegram diproses ${JSON.stringify(metrics)}`);
+      }
     });
   } catch (error) {
     console.error("Pesan order Telegram gagal diproses:", {
       chat_id: ctx.chat.id, message_id: ctx.message?.message_id,
-      code: error.code, error: error.message, at: new Date().toISOString(),
+      code: error.code, error: telegramErrorMessage(error), at: new Date().toISOString(),
     });
   }
 }
@@ -661,13 +656,13 @@ function registerHandlers() {
     limitTelegramRequests(ctx.telegram);
     return next();
   });
-  bot.command("setgrup", async (ctx) => { try { await handleSetGroup(ctx); } catch (error) { console.error("/setgrup gagal:", error.message); } });
-  bot.command("help", async (ctx) => { try { await ctx.reply(helpMessage(), threadOptions(ctx.message)); } catch (error) { console.error("/help gagal:", error.message); } });
-  bot.command("alarmnodeb", async (ctx) => { try { await handleAlarmRegistration(ctx, "nodeb"); } catch (error) { console.error("/alarmnodeb gagal:", error.message); await ctx.reply(`⚠️ ${error.message}`, threadOptions(ctx.message)); } });
-  bot.command("alarmdatin", async (ctx) => { try { await handleAlarmRegistration(ctx, "datin"); } catch (error) { console.error("/alarmdatin gagal:", error.message); await ctx.reply(`⚠️ ${error.message}`, threadOptions(ctx.message)); } });
-  bot.command("stopalarmnodeb", async (ctx) => { try { await handleAlarmUnsubscribe(ctx, "nodeb"); } catch (error) { console.error("/stopalarmnodeb gagal:", error.message); await ctx.reply(`⚠️ ${error.message}`); } });
-  bot.command("stopalarmdatin", async (ctx) => { try { await handleAlarmUnsubscribe(ctx, "datin"); } catch (error) { console.error("/stopalarmdatin gagal:", error.message); await ctx.reply(`⚠️ ${error.message}`); } });
-  bot.command("alarmstatus", async (ctx) => { try { await handleAlarmStatus(ctx); } catch (error) { console.error("/alarmstatus gagal:", error.message); await ctx.reply(`⚠️ ${error.message}`); } });
+  bot.command("setgrup", async (ctx) => { try { await handleSetGroup(ctx); } catch (error) { console.error("/setgrup gagal:", telegramErrorMessage(error)); } });
+  bot.command("help", async (ctx) => { try { await ctx.reply(helpMessage(), threadOptions(ctx.message)); } catch (error) { console.error("/help gagal:", telegramErrorMessage(error)); } });
+  bot.command("alarmnodeb", async (ctx) => { try { await handleAlarmRegistration(ctx, "nodeb"); } catch (error) { console.error("/alarmnodeb gagal:", telegramErrorMessage(error)); await ctx.reply(`⚠️ ${telegramErrorMessage(error)}`, threadOptions(ctx.message)); } });
+  bot.command("alarmdatin", async (ctx) => { try { await handleAlarmRegistration(ctx, "datin"); } catch (error) { console.error("/alarmdatin gagal:", telegramErrorMessage(error)); await ctx.reply(`⚠️ ${telegramErrorMessage(error)}`, threadOptions(ctx.message)); } });
+  bot.command("stopalarmnodeb", async (ctx) => { try { await handleAlarmUnsubscribe(ctx, "nodeb"); } catch (error) { console.error("/stopalarmnodeb gagal:", telegramErrorMessage(error)); await ctx.reply(`⚠️ ${telegramErrorMessage(error)}`); } });
+  bot.command("stopalarmdatin", async (ctx) => { try { await handleAlarmUnsubscribe(ctx, "datin"); } catch (error) { console.error("/stopalarmdatin gagal:", telegramErrorMessage(error)); await ctx.reply(`⚠️ ${telegramErrorMessage(error)}`); } });
+  bot.command("alarmstatus", async (ctx) => { try { await handleAlarmStatus(ctx); } catch (error) { console.error("/alarmstatus gagal:", telegramErrorMessage(error)); await ctx.reply(`⚠️ ${telegramErrorMessage(error)}`); } });
   bot.command("config", (ctx) => handleOrderMessage(ctx, () => ingestConfigOrder(ctx)));
   bot.on("text", (ctx) => {
     const order = Boolean(parseIncomingOrder(ctx.message.text.trim()));
@@ -690,18 +685,18 @@ function registerHandlers() {
       await configureGroup(ctx, ctx.match[1], ctx.match[2], ctx.match[4], ctx.match[3] === "A" ? "ASSURANCE" : "PROVISIONING");
       await ctx.answerCbQuery();
     } catch (error) {
-      console.error("Konfigurasi grup Telegram gagal:", error.message);
+      console.error("Konfigurasi grup Telegram gagal:", telegramErrorMessage(error));
       await ctx.answerCbQuery("Gagal menyimpan konfigurasi. Periksa pengaturan grup dan coba lagi.", { show_alert: true });
     }
   });
   // Old inline keyboards cannot save a group without a workflow.
   bot.action(/^setgroup:category:(\d+):(\d+):(PENGAWALAN|LOGIC)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await ctx.editMessageText("Konfigurasi grup order\n\n3/4 — Pilih alur kerja:", workflowKeyboard(ctx.match[1], ctx.match[2])); await ctx.answerCbQuery(); });
   bot.action("setgroup:cancel", async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await ctx.editMessageText("Konfigurasi grup dibatalkan."); await ctx.answerCbQuery(); });
-  bot.action(/^alarmdatin:page:(\d+)$/, async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; await renderDatinInstitutionChoices(ctx, Number(ctx.match[1]), true); await ctx.answerCbQuery(); } catch (error) { console.error("Halaman /alarmdatin gagal:", error.message); await ctx.answerCbQuery("Gagal memuat pilihan.", { show_alert: true }); } });
-  bot.action(/^alarmdatin:toggle:(\d+):(\d+)$/, async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; const selected = await telegramRepository.toggleDatinSubscription(ctx.from.id, Number(ctx.match[1])); await renderDatinInstitutionChoices(ctx, Number(ctx.match[2]), true); await ctx.answerCbQuery(selected === null ? "Daftar instansi berubah. Pilih dari daftar terbaru." : undefined); } catch (error) { console.error("Pilihan /alarmdatin gagal:", error.message); await ctx.answerCbQuery("Gagal menyimpan pilihan.", { show_alert: true }); } });
-  bot.action(/^alarmdatin:clear:(\d+)$/, async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; await telegramRepository.clearDatinSubscriptions(ctx.from.id); await renderDatinInstitutionChoices(ctx, Number(ctx.match[1]), true); await ctx.answerCbQuery("Pilihan dikosongkan."); } catch (error) { console.error("Kosongkan /alarmdatin gagal:", error.message); await ctx.answerCbQuery("Gagal mengosongkan pilihan.", { show_alert: true }); } });
-  bot.action("alarmdatin:done", async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; const institutions = await telegramRepository.getDatinSubscriptionNames(ctx.from.id); await ctx.editMessageText(institutions.length ? `✅ Alarm DATIN aktif untuk ${institutions.length} instansi. Gunakan /alarmdatin untuk mengubah pilihan.` : "Belum ada instansi dipilih. Gunakan /alarmdatin untuk memilih."); await ctx.answerCbQuery(); } catch (error) { console.error("Simpan /alarmdatin gagal:", error.message); await ctx.answerCbQuery("Gagal menyimpan pilihan.", { show_alert: true }); } });
-  bot.catch((error) => console.error("Telegraf error:", error.message));
+  bot.action(/^alarmdatin:page:(\d+)$/, async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; await renderDatinInstitutionChoices(ctx, Number(ctx.match[1]), true); await ctx.answerCbQuery(); } catch (error) { console.error("Halaman /alarmdatin gagal:", telegramErrorMessage(error)); await ctx.answerCbQuery("Gagal memuat pilihan.", { show_alert: true }); } });
+  bot.action(/^alarmdatin:toggle:(\d+):(\d+)$/, async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; const selected = await telegramRepository.toggleDatinSubscription(ctx.from.id, Number(ctx.match[1])); await renderDatinInstitutionChoices(ctx, Number(ctx.match[2]), true); await ctx.answerCbQuery(selected === null ? "Daftar instansi berubah. Pilih dari daftar terbaru." : undefined); } catch (error) { console.error("Pilihan /alarmdatin gagal:", telegramErrorMessage(error)); await ctx.answerCbQuery("Gagal menyimpan pilihan.", { show_alert: true }); } });
+  bot.action(/^alarmdatin:clear:(\d+)$/, async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; await telegramRepository.clearDatinSubscriptions(ctx.from.id); await renderDatinInstitutionChoices(ctx, Number(ctx.match[1]), true); await ctx.answerCbQuery("Pilihan dikosongkan."); } catch (error) { console.error("Kosongkan /alarmdatin gagal:", telegramErrorMessage(error)); await ctx.answerCbQuery("Gagal mengosongkan pilihan.", { show_alert: true }); } });
+  bot.action("alarmdatin:done", async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; const institutions = await telegramRepository.getDatinSubscriptionNames(ctx.from.id); await ctx.editMessageText(institutions.length ? `✅ Alarm DATIN aktif untuk ${institutions.length} instansi. Gunakan /alarmdatin untuk mengubah pilihan.` : "Belum ada instansi dipilih. Gunakan /alarmdatin untuk memilih."); await ctx.answerCbQuery(); } catch (error) { console.error("Simpan /alarmdatin gagal:", telegramErrorMessage(error)); await ctx.answerCbQuery("Gagal menyimpan pilihan.", { show_alert: true }); } });
+  bot.catch((error) => console.error("Telegraf error:", telegramErrorMessage(error)));
 }
 
 async function notifyOrderClaim(claim) {
@@ -717,7 +712,7 @@ async function notifyOrderClaim(claim) {
       });
     });
   }
-  catch (error) { console.error("Notifikasi claim Telegram gagal:", error.message); }
+  catch (error) { console.error("Notifikasi claim Telegram gagal:", telegramErrorMessage(error)); }
 }
 
 async function rememberOutgoing(orderId, chatId, threadId, messageIds, kind) {
@@ -725,7 +720,7 @@ async function rememberOutgoing(orderId, chatId, threadId, messageIds, kind) {
   try {
     await conversationRepository.recordOutgoing({ orderId, chatId, threadId, messageIds, kind });
   } catch (error) {
-    console.error("ID pesan Telegram tidak dapat dicatat:", error.message);
+    console.error("ID pesan Telegram tidak dapat dicatat:", telegramErrorMessage(error));
   }
 }
 
@@ -764,8 +759,8 @@ async function sendResultFiles(notification, options, caption) {
       return { deliveries: messages.map((message) => message.message_id), errors };
     } catch (error) {
       // Do not retry as separate messages: an ambiguous API failure could duplicate an album.
-      console.error("Pengiriman album Telegram gagal:", error.message);
-      return { deliveries, errors: [error.message] };
+      console.error("Pengiriman album Telegram gagal:", telegramErrorMessage(error));
+      return { deliveries, errors: [telegramErrorMessage(error)] };
     }
   }
 
@@ -783,8 +778,8 @@ async function sendResultFiles(notification, options, caption) {
         : bot.telegram.sendDocument(notification.chat_id, filePayload, fileOptions));
       deliveries.push(message.message_id);
     } catch (error) {
-      console.error("Pengiriman lampiran Telegram gagal:", error.message);
-      errors.push(`${file.file_name || "Lampiran"}: ${error.message}`);
+      console.error("Pengiriman lampiran Telegram gagal:", telegramErrorMessage(error));
+      errors.push(`${file.file_name || "Lampiran"}: ${telegramErrorMessage(error)}`);
     }
   }
 
@@ -814,8 +809,8 @@ async function deliverOrderResult(notification) {
     ));
     deliveries.push(message.message_id);
   } catch (error) {
-    console.error("Pengiriman result Telegram gagal:", error.message);
-    errors.push(error.message);
+    console.error("Pengiriman result Telegram gagal:", telegramErrorMessage(error));
+    errors.push(telegramErrorMessage(error));
   }
 
   const fileDelivery = await sendResultFiles(notification, options, useCaption ? content : undefined);
@@ -843,10 +838,10 @@ async function sendMessage(chatId, text, threadId = 0) {
     );
     return { delivered: true, message_id: message.message_id, error: null };
   } catch (error) {
-    console.error("Pengiriman alarm Cacti ke Telegram gagal:", error.message);
+    console.error("Pengiriman alarm Cacti ke Telegram gagal:", telegramErrorMessage(error));
     return {
       delivered: false,
-      error: error.message,
+      error: telegramErrorMessage(error),
       error_code: error.response?.error_code || null,
       retry_after: error.response?.parameters?.retry_after || null,
     };
@@ -923,14 +918,14 @@ async function runPolling(signal) {
       const temporary = ["FetchError", "AbortError", "TimeoutError"].includes(error.name)
         || timeoutConflict || code === 429 || (typeof code === "number" && code >= 500);
       if (!temporary || retryDelay === undefined) {
-        console.error(`Polling Telegram gagal setelah ${attempt + 1} percobaan: ${error.message}`);
+        console.error(`Polling Telegram gagal setelah ${attempt + 1} percobaan: ${telegramErrorMessage(error)}`);
         return;
       }
 
       const retryAfter = code === 429 ? Number(error.parameters?.retry_after) * 1000 || 0 : 0;
       const conflictCooldown = timeoutConflict ? (TELEGRAM_POLL_SECONDS + 5) * 1000 : 0;
       const waitMs = Math.max(retryDelay, retryAfter, conflictCooldown);
-      console.warn(`Polling Telegram gagal: ${error.message}. Retry ${attempt + 1}/${POLLING_RETRY_DELAYS.length} dalam ${waitMs / 1000} detik.`);
+      console.warn(`Polling Telegram gagal: ${telegramErrorMessage(error)}. Retry ${attempt + 1}/${POLLING_RETRY_DELAYS.length} dalam ${waitMs / 1000} detik.`);
       await delay(waitMs, undefined, { signal }).catch((error) => {
         if (!signal.aborted) throw error;
       });

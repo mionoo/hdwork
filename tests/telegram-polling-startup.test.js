@@ -207,3 +207,16 @@ test("409 following a request timeout gets bounded recovery with a cooldown", as
     assert.equal(state.delays[0], 15000);
   }
 });
+
+test("polling errors redact bot credentials and routine batches stay quiet by default", async () => {
+  const { service, state } = fixture({
+    callApi: async () => { throw new Error('request to https://api.telegram.org/bot123456:fake_test_credential/getMe failed'); },
+  });
+  await service.startPolling();
+  assert.match(state.logs.at(-1), /bot\[REDACTED\]/);
+  assert.ok(!state.logs.join('\n').includes('fake_test_credential'));
+
+  const quiet = fixture({ callApi: async () => [{ update_id: 1 }] });
+  await quiet.state.client.callApi('getUpdates', { timeout: 50 });
+  assert.equal(quiet.state.logs.length, 0);
+});

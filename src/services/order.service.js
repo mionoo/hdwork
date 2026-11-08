@@ -230,14 +230,7 @@ async function getOrderDetail(
 // }
 
 async function canAccessOrder(order, currentUser) {
-  console.log("ORDER ACCESS:", {
-    order_id: order.id,
-    order_city_id: order.city_id,
-    order_segment_id: order.segment_id,
-    user_id: currentUser.id,
-    user_city_id: currentUser.city_id,
-    role: currentUser.role,
-  });
+
 
   if (!order) {
     return false;
