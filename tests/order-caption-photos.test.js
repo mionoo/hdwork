@@ -5,7 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 function load(file, dependencies) {
-  const sandbox = { module: { exports: {} }, console, setTimeout, clearTimeout, AbortController, AbortSignal, process: { env: { TELEGRAM_BOT_TOKEN: "test-only" } }, require: (name) => dependencies[name] || (name.startsWith("node:") ? require(name) : {}) };
+  const sandbox = { module: { exports: {} }, console, setTimeout, clearTimeout, AbortController, AbortSignal, process: { env: { TELEGRAM_BOT_TOKEN: "test-only" } }, require: (name) => dependencies[name] || (name === "./telegram-transport" ? require("../src/services/telegram-transport") : name.startsWith("node:") ? require(name) : {}) };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", file), "utf8"), sandbox);
   return sandbox.module.exports;
 }

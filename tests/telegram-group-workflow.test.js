@@ -5,7 +5,7 @@ const vm = require("node:vm");
 const path = require("node:path");
 
 function load(file, dependencies, env = {}) {
-  const context = { module: { exports: {} }, require: (name) => dependencies[name] || (name.startsWith("node:") ? require(name) : {}), process: { env }, console, setTimeout, clearTimeout, AbortController, AbortSignal };
+  const context = { module: { exports: {} }, require: (name) => dependencies[name] || (name === "./telegram-transport" ? require("../src/services/telegram-transport") : name.startsWith("node:") ? require(name) : {}), process: { env }, console, setTimeout, clearTimeout, AbortController, AbortSignal };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", file), "utf8"), context);
   return context.module.exports;
 }

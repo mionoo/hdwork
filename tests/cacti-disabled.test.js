@@ -65,6 +65,7 @@ test('alarm commands, old callbacks and notification senders are paused while or
   const commands = new Map(), actions = [], sent = [];
   const service = load('src/services/telegram.service.js', {
     '../config/features': { CACTI_ENABLED: false },
+    './telegram-transport': require('../src/services/telegram-transport'),
     telegraf: { Telegraf: class {
       telegram = { callApi: async () => ({}), sendMessage: async (...args) => { sent.push(args); return { message_id: 9 }; } };
       use() {} on() {} catch() {}

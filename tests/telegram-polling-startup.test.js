@@ -32,7 +32,7 @@ function fixture({ callApi, wait = async () => {}, poll = async () => {}, stop =
   const log = (message) => state.logs.push(message);
   const context = {
     module: { exports: {} },
-    require: (name) => dependencies[name] || (name.startsWith("node:") ? require(name) : {}),
+    require: (name) => dependencies[name] || (name === "./telegram-transport" ? require("../src/services/telegram-transport") : name.startsWith("node:") ? require(name) : {}),
     process: { env: { TELEGRAM_BOT_TOKEN: "test-only" } },
     AbortController, AbortSignal,
     ...timers,
@@ -141,7 +141,7 @@ test("Telegram deadlines abort real requests and remain retryable for polling", 
     },
   });
 
-  for (const [method, timeout] of [["sendDocument", 20000], ["getUpdates", 25000]]) {
+  for (const [method, timeout] of [["sendDocument", 20000], ["getUpdates", 25000], ["getMe", 10000], ["deleteWebhook", 10000]]) {
     const request = state.client.callApi(method, method === "getUpdates" ? { timeout: 50 } : {});
     const timer = [...pending.values()][0];
     assert.equal(timer.milliseconds, timeout);

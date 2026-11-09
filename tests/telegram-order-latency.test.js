@@ -36,7 +36,11 @@ test("real Telegraf polling accepts successive order batches while an outgoing f
         if (method === "getUpdates") {
           if (payload.limit === 1) return [];
           assert.equal(payload.timeout, 10);
-          assert.equal(this.telegram.options.agent.keepAlive, false);
+          const pollAgent = this.telegram.options.agent(new URL("https://api.telegram.org/bottest/getUpdates"));
+          const apiAgent = this.telegram.options.agent(new URL("https://api.telegram.org/bottest/sendMessage"));
+          assert.equal(pollAgent.keepAlive, true);
+          assert.equal(pollAgent.options.family, 4);
+          assert.notEqual(pollAgent, apiAgent);
           return new Promise((resolve, reject) => {
             waitingPoll = resolve;
             signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true });
@@ -79,7 +83,7 @@ test("real Telegraf polling accepts successive order batches while an outgoing f
   };
   const moduleObject = { exports: {} };
   new Function("require", "module", "process", fs.readFileSync(require.resolve("../src/services/telegram.service"), "utf8"))(
-    (name) => dependencies[name] || (name.startsWith("node:") ? require(name) : {}), moduleObject, { env: { TELEGRAM_BOT_TOKEN: "test-only" } },
+    (name) => dependencies[name] || (name === "./telegram-transport" ? require("../src/services/telegram-transport") : name.startsWith("node:") ? require(name) : {}), moduleObject, { env: { TELEGRAM_BOT_TOKEN: "test-only" } },
   );
   const service = moduleObject.exports;
   const polling = service.startPolling();

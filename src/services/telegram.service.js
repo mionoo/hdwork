@@ -1,7 +1,8 @@
 const { CACTI_ENABLED = false } = require("../config/features");
 const { Markup, Telegraf } = require("telegraf");
 const { setTimeout: delay } = require("node:timers/promises");
-const { Agent } = require("node:https");
+const { createTelegramTransport } = require("./telegram-transport");
+const telegramTransport = createTelegramTransport();
 const telegramRepository = require("../repositories/telegram.repository");
 const orderRepository = require("../repositories/order.repository");
 const realtimeService = require("../services/realtime.service");
@@ -23,7 +24,7 @@ function positiveInteger(value, fallback) {
 
 const bot = process.env.TELEGRAM_BOT_TOKEN
   ? new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
-    telegram: { agent: new Agent({ keepAlive: false }) },
+    telegram: { agent: telegramTransport.agent },
   })
   : null;
 const PERSONAL_ALARM_RATE_PER_SECOND = positiveInteger(process.env.TELEGRAM_PERSONAL_ALARM_RATE_PER_SECOND, 25);
@@ -112,7 +113,9 @@ function limitTelegramRequests(telegram) {
     const signal = options.signal;
     if (signal?.aborted) stop();
     else signal?.addEventListener("abort", stop, { once: true });
-    const timeoutMs = longPolling ? TELEGRAM_POLL_TIMEOUT_MS : TELEGRAM_REQUEST_TIMEOUT_MS;
+    const setupRequest = method === "getMe" || method === "deleteWebhook";
+    const timeoutMs = longPolling ? TELEGRAM_POLL_TIMEOUT_MS
+      : setupRequest ? POLLING_REQUEST_TIMEOUT_MS : TELEGRAM_REQUEST_TIMEOUT_MS;
     let timedOut = false;
     const timeout = setTimeout(() => { timedOut = true; stop(); }, timeoutMs);
     try {
@@ -126,8 +129,16 @@ function limitTelegramRequests(telegram) {
       }
       return response;
     } catch (error) {
-      if (!timedOut) throw error;
-      if (longPolling) lastPollingTimeoutAt = Date.now();
+      if (longPolling && (timedOut || ["ETIMEDOUT", "ECONNRESET", "ECONNREFUSED"].includes(error.code))) {
+        lastPollingTimeoutAt = Date.now();
+      }
+      if (!timedOut) {
+        if (longPolling && !signal?.aborted) console.warn("Koneksi polling Telegram gagal", {
+          code: error.code || error.name, duration_ms: Date.now() - startedAt,
+          error: telegramErrorMessage(error),
+        });
+        throw error;
+      }
       console.warn("Permintaan Telegram melewati batas waktu", { method, timeout_ms: timeoutMs });
       // Telegraf treats AbortError as a deliberate polling stop. Timeouts must retry instead.
       throw Object.assign(new Error(`Permintaan Telegram ${method} melewati batas waktu.`), { name: "FetchError", code: "ETIMEDOUT" });
@@ -895,7 +906,7 @@ async function runPolling(signal) {
   for (let attempt = 0; !signal.aborted; attempt += 1) {
     try {
       const startupRequest = () => ({
-        signal: AbortSignal.any([signal, AbortSignal.timeout(POLLING_REQUEST_TIMEOUT_MS)]),
+        signal,
       });
       bot.botInfo ??= await bot.telegram.callApi("getMe", {}, startupRequest());
       signal.throwIfAborted();
@@ -906,7 +917,7 @@ async function runPolling(signal) {
       // Start that same loop after the abortable setup to avoid starting during shutdown.
       const polling = bot.startPolling();
       pollingActive = true;
-      console.log(`🤖 Polling Telegram dimulai (timeout ${TELEGRAM_POLL_SECONDS} detik)`);
+      console.log(`🤖 Polling Telegram dimulai (IPv4, keep-alive, timeout ${TELEGRAM_POLL_SECONDS} detik)`);
       try {
         await polling;
       } finally {
