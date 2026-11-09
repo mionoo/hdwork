@@ -6,7 +6,7 @@ const vm = require("node:vm");
 
 const source = fs.readFileSync(path.join(__dirname, "../src/services/telegram.service.js"), "utf8");
 
-function fixture({ callApi, wait = async () => {}, poll = async () => {}, stop = () => {}, timers = { setTimeout, clearTimeout } }) {
+function fixture({ date = Date, callApi, wait = async () => {}, poll = async () => {}, stop = () => {}, timers = { setTimeout, clearTimeout } }) {
   const state = { registrations: 0, starts: 0, stops: 0, delays: [], logs: [] };
   const dependencies = {
     telegraf: {
@@ -34,7 +34,7 @@ function fixture({ callApi, wait = async () => {}, poll = async () => {}, stop =
     module: { exports: {} },
     require: (name) => dependencies[name] || (name === "./telegram-transport" ? require("../src/services/telegram-transport") : name.startsWith("node:") ? require(name) : {}),
     process: { env: { TELEGRAM_BOT_TOKEN: "test-only" } },
-    AbortController, AbortSignal,
+    AbortController, AbortSignal, Date: date,
     ...timers,
     console: { log, warn: log, error: log },
   };
@@ -219,4 +219,37 @@ test("polling errors redact bot credentials and routine batches stay quiet by de
   const quiet = fixture({ callApi: async () => [{ update_id: 1 }] });
   await quiet.state.client.callApi('getUpdates', { timeout: 50 });
   assert.equal(quiet.state.logs.length, 0);
+});
+
+
+test("a successful batch after a network reset retains bounded conflict recovery; old failures do not mask another poller", async () => {
+  for (const expired of [false, true]) {
+    let now = 1000000;
+    class Clock extends Date { static now() { return now; } }
+    let failNetwork = true;
+    const { service, state } = fixture({
+      date: Clock,
+      callApi: async (method) => {
+        if (method !== "getUpdates") return {};
+        if (failNetwork) {
+          failNetwork = false;
+          throw Object.assign(new Error("reset"), { name: "FetchError", code: "ECONNRESET" });
+        }
+        return [{ update_id: 42 }];
+      },
+      poll: async () => {
+        if (state.starts === 1) {
+          // A batch arrives successfully, then the following request sees a conflict.
+          await state.client.callApi("getUpdates", { timeout: 50, offset: 42 });
+          if (expired) now += 120001;
+          throw Object.assign(new Error("conflict"), { code: 409 });
+        }
+      },
+    });
+    await assert.rejects(state.client.callApi("getUpdates", { timeout: 50 }), { code: "ECONNRESET" });
+    await service.startPolling();
+    assert.equal(state.starts, expired ? 1 : 2);
+    assert.deepEqual(state.delays, expired ? [] : [15000]);
+    if (expired) assert.match(state.logs.at(-1), /konflik 409/);
+  }
 });

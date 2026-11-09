@@ -46,7 +46,8 @@ let handlersRegistered = false;
 let pollingTask;
 let pollingController;
 let pollingActive = false;
-let lastPollingTimeoutAt = 0;
+// Keep recent failures through a successful batch: the previous remote poll may still be ending.
+let lastPollingConnectionFailureAt = 0;
 let previousPollFinishedAt = 0;
 let personalAlarmQueue = Promise.resolve();
 let nextPersonalAlarmAt = 0;
@@ -121,7 +122,6 @@ function limitTelegramRequests(telegram) {
     try {
       const response = await callApi(method, requestPayload, { ...options, signal: controller.signal });
       if (longPolling) {
-        lastPollingTimeoutAt = 0;
         if (TELEGRAM_DEBUG_LOGS && response.length) console.log("Batch Telegram diterima", {
           updates: response.length, request_ms: Date.now() - startedAt,
           poll_gap_ms: gap, at: new Date().toISOString(),
@@ -130,7 +130,7 @@ function limitTelegramRequests(telegram) {
       return response;
     } catch (error) {
       if (longPolling && (timedOut || ["ETIMEDOUT", "ECONNRESET", "ECONNREFUSED"].includes(error.code))) {
-        lastPollingTimeoutAt = Date.now();
+        lastPollingConnectionFailureAt = Date.now();
       }
       if (!timedOut) {
         if (longPolling && !signal?.aborted) console.warn("Koneksi polling Telegram gagal", {
@@ -927,8 +927,8 @@ async function runPolling(signal) {
     } catch (error) {
       if (signal.aborted) return;
       const code = error.code;
-      const timeoutConflict = code === 409 && lastPollingTimeoutAt > 0
-        && Date.now() - lastPollingTimeoutAt < 120000;
+      const timeoutConflict = code === 409 && lastPollingConnectionFailureAt > 0
+        && Date.now() - lastPollingConnectionFailureAt < 120000;
       if (code === 409 && !timeoutConflict) {
         console.error("Polling Telegram dihentikan karena konflik 409. Periksa proses lain yang memakai token bot yang sama.", error.description || error.response?.description || "");
         return;

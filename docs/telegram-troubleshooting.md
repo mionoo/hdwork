@@ -65,3 +65,11 @@ Jika skrip juga timeout, periksa jalur server/router/ISP menuju Telegram; peruba
 Tidak ada retry otomatis untuk pengiriman pesan atau lampiran setelah timeout. Pesan dapat sudah sampai walaupun respons terputus; periksa grup sebelum mengirim ulang. Cacti tetap nonaktif dan tidak ada migrasi database atau build frontend untuk perubahan transport ini.
 
 Rujukan API: [Node.js 20 HTTPS Agent](https://nodejs.org/docs/latest-v20.x/api/https.html#class-httpsagent) dan [siklus socket HTTP Agent](https://nodejs.org/docs/latest-v20.x/api/http.html#agentkeepsocketalivesocket).
+
+## Polling berhenti setelah koneksi pulih
+
+`409: terminated by other getUpdates request` berbeda dari HTTP 409 saat claim order. Konflik polling berarti Telegram melihat request polling lain untuk token yang sama. Bisa ada proses lain atau request lama yang belum selesai; log saja tidak cukup membedakannya.
+
+Pemulihan mempertahankan riwayat gangguan polling selama 120 detik, termasuk jika ada satu batch yang berhasil sesudah gangguan. Jika konflik terjadi dalam periode tersebut, backend menunggu minimal durasi long poll ditambah 5 detik (default 15 detik), lalu mencoba lagi dengan budget retry yang sudah ada, maksimal lima retry. Keberhasilan satu batch tidak lagi menghapus riwayat terlalu dini. Konflik tanpa riwayat gangguan baru atau yang terus berulang tetap menghentikan polling; pastikan hanya satu instance mengambil update token yang sama.
+
+Jika log menyatakan polling dihentikan, status PM2 `online` hanya menunjukkan proses API masih hidup. Setelah memeriksa proses duplikat, restart `hdwork-backend` untuk mengaktifkan polling kembali. Jangan mengirim ulang seluruh order lama terlebih dahulu: pesan yang masih tersedia di Telegram dapat diproses sebagai backlog ketika polling pulih.
