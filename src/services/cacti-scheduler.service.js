@@ -1,3 +1,4 @@
+const { CACTI_ENABLED } = require("../config/features");
 const pool = require("../config/database");
 const telegramRepository = require("../repositories/telegram.repository");
 const telegramService = require("./telegram.service");
@@ -193,7 +194,7 @@ async function sendCollectorHealth() {
 }
 
 async function runScheduledNotifications() {
-  if (schedulerRunning) return;
+  if (!CACTI_ENABLED || schedulerRunning) return;
   schedulerRunning = true;
   try {
     const vpnDisconnected = await sendCollectorHealth();
@@ -223,7 +224,7 @@ function scheduleNextRun() {
 }
 
 function startCactiScheduler() {
-  if (schedulerStarted) return;
+  if (!CACTI_ENABLED || schedulerStarted) return;
   schedulerStarted = true;
   scheduleNextRun();
   console.log("⏱️ Alarm Cacti dijadwalkan pada menit 00, 10, 20, 30, 40, dan 50");

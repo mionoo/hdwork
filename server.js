@@ -9,7 +9,8 @@ const telegramService = require("./src/services/telegram.service");
 const realtimeService = require("./src/services/realtime.service");
 const agentRealtimeService = require("./src/services/agent-realtime.service");
 const terminalRealtimeService = require("./src/services/terminal-realtime.service");
-const { startCactiScheduler, stopCactiScheduler } = require("./src/services/cacti-scheduler.service");
+const { CACTI_ENABLED } = require("./src/config/features");
+const cactiScheduler = CACTI_ENABLED ? require("./src/services/cacti-scheduler.service") : null;
 
 const PORT = Number(process.env.PORT) || 3090;
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:5173";
@@ -43,7 +44,8 @@ async function startServer() {
   server.listen(PORT, () => {
     if (shuttingDown) return;
     console.log(`🚀 Server running on http://localhost:${PORT}`);
-    startCactiScheduler();
+    if (cactiScheduler) cactiScheduler.startCactiScheduler();
+    else console.log("Cacti nonaktif: scheduler, integrasi, dan notifikasi dinonaktifkan.");
     telegramService.startPolling()?.catch((error) => {
       console.error("Pengendali polling Telegram gagal:", error.message);
     });
@@ -60,7 +62,7 @@ async function shutdown(reason, exitCode = 0) {
   }, SHUTDOWN_TIMEOUT_MS);
 
   try {
-    stopCactiScheduler();
+    cactiScheduler?.stopCactiScheduler();
     await Promise.all([
       telegramService.stopPolling(reason),
       new Promise((resolve, reject) => {

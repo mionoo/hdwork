@@ -1,3 +1,4 @@
+const { CACTI_ENABLED = false } = require("../config/features");
 const { Markup, Telegraf } = require("telegraf");
 const { setTimeout: delay } = require("node:timers/promises");
 const { Agent } = require("node:https");
@@ -278,11 +279,13 @@ function helpMessage() {
     "VALIN ID : 121212",
     "KETERANGAN : konfik inet nok",
     "",
+    ...(CACTI_ENABLED ? [
     "## ALARM PERSONAL ##",
     "Kirim di chat pribadi bot:",
     "/alarmdatin atau /alarmnodeb untuk mulai menerima alarm ONT down",
     "/stopalarmdatin atau /stopalarmnodeb untuk berhenti",
     "/alarmstatus untuk melihat alarm yang aktif",
+    ] : []),
   ].join("\n");
 }
 
@@ -658,11 +661,13 @@ function registerHandlers() {
   });
   bot.command("setgrup", async (ctx) => { try { await handleSetGroup(ctx); } catch (error) { console.error("/setgrup gagal:", telegramErrorMessage(error)); } });
   bot.command("help", async (ctx) => { try { await ctx.reply(helpMessage(), threadOptions(ctx.message)); } catch (error) { console.error("/help gagal:", telegramErrorMessage(error)); } });
-  bot.command("alarmnodeb", async (ctx) => { try { await handleAlarmRegistration(ctx, "nodeb"); } catch (error) { console.error("/alarmnodeb gagal:", telegramErrorMessage(error)); await ctx.reply(`⚠️ ${telegramErrorMessage(error)}`, threadOptions(ctx.message)); } });
-  bot.command("alarmdatin", async (ctx) => { try { await handleAlarmRegistration(ctx, "datin"); } catch (error) { console.error("/alarmdatin gagal:", telegramErrorMessage(error)); await ctx.reply(`⚠️ ${telegramErrorMessage(error)}`, threadOptions(ctx.message)); } });
-  bot.command("stopalarmnodeb", async (ctx) => { try { await handleAlarmUnsubscribe(ctx, "nodeb"); } catch (error) { console.error("/stopalarmnodeb gagal:", telegramErrorMessage(error)); await ctx.reply(`⚠️ ${telegramErrorMessage(error)}`); } });
-  bot.command("stopalarmdatin", async (ctx) => { try { await handleAlarmUnsubscribe(ctx, "datin"); } catch (error) { console.error("/stopalarmdatin gagal:", telegramErrorMessage(error)); await ctx.reply(`⚠️ ${telegramErrorMessage(error)}`); } });
-  bot.command("alarmstatus", async (ctx) => { try { await handleAlarmStatus(ctx); } catch (error) { console.error("/alarmstatus gagal:", telegramErrorMessage(error)); await ctx.reply(`⚠️ ${telegramErrorMessage(error)}`); } });
+  if (CACTI_ENABLED) {
+    bot.command("alarmnodeb", async (ctx) => { try { await handleAlarmRegistration(ctx, "nodeb"); } catch (error) { console.error("/alarmnodeb gagal:", telegramErrorMessage(error)); await ctx.reply(`⚠️ ${telegramErrorMessage(error)}`, threadOptions(ctx.message)); } });
+    bot.command("alarmdatin", async (ctx) => { try { await handleAlarmRegistration(ctx, "datin"); } catch (error) { console.error("/alarmdatin gagal:", telegramErrorMessage(error)); await ctx.reply(`⚠️ ${telegramErrorMessage(error)}`, threadOptions(ctx.message)); } });
+    bot.command("stopalarmnodeb", async (ctx) => { try { await handleAlarmUnsubscribe(ctx, "nodeb"); } catch (error) { console.error("/stopalarmnodeb gagal:", telegramErrorMessage(error)); await ctx.reply(`⚠️ ${telegramErrorMessage(error)}`); } });
+    bot.command("stopalarmdatin", async (ctx) => { try { await handleAlarmUnsubscribe(ctx, "datin"); } catch (error) { console.error("/stopalarmdatin gagal:", telegramErrorMessage(error)); await ctx.reply(`⚠️ ${telegramErrorMessage(error)}`); } });
+    bot.command("alarmstatus", async (ctx) => { try { await handleAlarmStatus(ctx); } catch (error) { console.error("/alarmstatus gagal:", telegramErrorMessage(error)); await ctx.reply(`⚠️ ${telegramErrorMessage(error)}`); } });
+  }
   bot.command("config", (ctx) => handleOrderMessage(ctx, () => ingestConfigOrder(ctx)));
   bot.on("text", (ctx) => {
     const order = Boolean(parseIncomingOrder(ctx.message.text.trim()));
@@ -692,10 +697,12 @@ function registerHandlers() {
   // Old inline keyboards cannot save a group without a workflow.
   bot.action(/^setgroup:category:(\d+):(\d+):(PENGAWALAN|LOGIC)$/, async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await ctx.editMessageText("Konfigurasi grup order\n\n3/4 — Pilih alur kerja:", workflowKeyboard(ctx.match[1], ctx.match[2])); await ctx.answerCbQuery(); });
   bot.action("setgroup:cancel", async (ctx) => { if (!(await ensureCallbackAdmin(ctx))) return; await ctx.editMessageText("Konfigurasi grup dibatalkan."); await ctx.answerCbQuery(); });
-  bot.action(/^alarmdatin:page:(\d+)$/, async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; await renderDatinInstitutionChoices(ctx, Number(ctx.match[1]), true); await ctx.answerCbQuery(); } catch (error) { console.error("Halaman /alarmdatin gagal:", telegramErrorMessage(error)); await ctx.answerCbQuery("Gagal memuat pilihan.", { show_alert: true }); } });
-  bot.action(/^alarmdatin:toggle:(\d+):(\d+)$/, async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; const selected = await telegramRepository.toggleDatinSubscription(ctx.from.id, Number(ctx.match[1])); await renderDatinInstitutionChoices(ctx, Number(ctx.match[2]), true); await ctx.answerCbQuery(selected === null ? "Daftar instansi berubah. Pilih dari daftar terbaru." : undefined); } catch (error) { console.error("Pilihan /alarmdatin gagal:", telegramErrorMessage(error)); await ctx.answerCbQuery("Gagal menyimpan pilihan.", { show_alert: true }); } });
-  bot.action(/^alarmdatin:clear:(\d+)$/, async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; await telegramRepository.clearDatinSubscriptions(ctx.from.id); await renderDatinInstitutionChoices(ctx, Number(ctx.match[1]), true); await ctx.answerCbQuery("Pilihan dikosongkan."); } catch (error) { console.error("Kosongkan /alarmdatin gagal:", telegramErrorMessage(error)); await ctx.answerCbQuery("Gagal mengosongkan pilihan.", { show_alert: true }); } });
-  bot.action("alarmdatin:done", async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; const institutions = await telegramRepository.getDatinSubscriptionNames(ctx.from.id); await ctx.editMessageText(institutions.length ? `✅ Alarm DATIN aktif untuk ${institutions.length} instansi. Gunakan /alarmdatin untuk mengubah pilihan.` : "Belum ada instansi dipilih. Gunakan /alarmdatin untuk memilih."); await ctx.answerCbQuery(); } catch (error) { console.error("Simpan /alarmdatin gagal:", telegramErrorMessage(error)); await ctx.answerCbQuery("Gagal menyimpan pilihan.", { show_alert: true }); } });
+  if (CACTI_ENABLED) {
+    bot.action(/^alarmdatin:page:(\d+)$/, async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; await renderDatinInstitutionChoices(ctx, Number(ctx.match[1]), true); await ctx.answerCbQuery(); } catch (error) { console.error("Halaman /alarmdatin gagal:", telegramErrorMessage(error)); await ctx.answerCbQuery("Gagal memuat pilihan.", { show_alert: true }); } });
+    bot.action(/^alarmdatin:toggle:(\d+):(\d+)$/, async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; const selected = await telegramRepository.toggleDatinSubscription(ctx.from.id, Number(ctx.match[1])); await renderDatinInstitutionChoices(ctx, Number(ctx.match[2]), true); await ctx.answerCbQuery(selected === null ? "Daftar instansi berubah. Pilih dari daftar terbaru." : undefined); } catch (error) { console.error("Pilihan /alarmdatin gagal:", telegramErrorMessage(error)); await ctx.answerCbQuery("Gagal menyimpan pilihan.", { show_alert: true }); } });
+    bot.action(/^alarmdatin:clear:(\d+)$/, async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; await telegramRepository.clearDatinSubscriptions(ctx.from.id); await renderDatinInstitutionChoices(ctx, Number(ctx.match[1]), true); await ctx.answerCbQuery("Pilihan dikosongkan."); } catch (error) { console.error("Kosongkan /alarmdatin gagal:", telegramErrorMessage(error)); await ctx.answerCbQuery("Gagal mengosongkan pilihan.", { show_alert: true }); } });
+    bot.action("alarmdatin:done", async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; const institutions = await telegramRepository.getDatinSubscriptionNames(ctx.from.id); await ctx.editMessageText(institutions.length ? `✅ Alarm DATIN aktif untuk ${institutions.length} instansi. Gunakan /alarmdatin untuk mengubah pilihan.` : "Belum ada instansi dipilih. Gunakan /alarmdatin untuk memilih."); await ctx.answerCbQuery(); } catch (error) { console.error("Simpan /alarmdatin gagal:", telegramErrorMessage(error)); await ctx.answerCbQuery("Gagal menyimpan pilihan.", { show_alert: true }); } });
+  }
   bot.catch((error) => console.error("Telegraf error:", telegramErrorMessage(error)));
 }
 
@@ -826,6 +833,7 @@ async function deliverOrderResult(notification) {
 }
 
 async function sendMessage(chatId, text, threadId = 0) {
+  if (!CACTI_ENABLED) return { delivered: false, skipped: true, error: "Cacti dinonaktifkan" };
   if (!bot || !chatId) {
     return { delivered: false, error: "Bot atau tujuan Telegram tidak tersedia" };
   }
@@ -849,6 +857,7 @@ async function sendMessage(chatId, text, threadId = 0) {
 }
 
 async function sendPersonalAlarmMessage(chatId, text) {
+  if (!CACTI_ENABLED) return { delivered: false, skipped: true, error: "Cacti dinonaktifkan" };
   const run = async () => {
     let lastDelivery = null;
 

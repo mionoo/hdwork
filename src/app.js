@@ -12,16 +12,28 @@ const agentRoutes = require("./routes/agent.routes");
 
 const networkRoutes = require("./routes/network.routes");
 
-const cactyRoutes = require("./routes/cacty.routes")
+const { CACTI_ENABLED } = require("./config/features");
 
 const app = express();
 
 app.use(cors());
-// The spreadsheet snapshot has its own bounded parser; register before the default 100 KB parser.
-app.use("/api/datin-sheet", require("./routes/datin-sheet-sync.routes"));
-app.use("/api/datin-cacti", express.json({ limit: "2mb" }));
+// Reject paused integrations before parsing payloads or loading their database services.
+if (!CACTI_ENABLED) {
+  app.use(["/api/cactys", "/api/datin-cacti", "/api/datin-sheet"], (req, res) => {
+    res.status(503).json({
+      success: false,
+      code: "CACTI_DISABLED",
+      message: "Seluruh fitur Cacti sementara dinonaktifkan. HD Work fokus pada order.",
+    });
+  });
+} else {
+  // The spreadsheet snapshot has its own bounded parser before the default parser.
+  app.use("/api/datin-sheet", require("./routes/datin-sheet-sync.routes"));
+  app.use("/api/datin-cacti", express.json({ limit: "2mb" }));
+  app.use("/api/datin-cacti", require("./routes/datin-cacti.routes"));
+  app.use("/api/cactys", express.json(), require("./routes/cacty.routes"));
+}
 app.use(express.json());
-app.use("/api/datin-cacti", require("./routes/datin-cacti.routes"));
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
 app.get("/", (req, res) => {
@@ -42,8 +54,6 @@ app.use("/api/attendance", attendanceRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 
 app.use("/api/network", networkRoutes);
-
-app.use("/api/cactys", cactyRoutes);
 
 app.use((error, req, res, next) => {
   if (error?.code === "LIMIT_FILE_SIZE") {
