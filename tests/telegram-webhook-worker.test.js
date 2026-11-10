@@ -57,3 +57,31 @@ test('missing migration prevents registration; registration network retries do n
   assert.equal(service.getStatus().registration, 'failed');
   await service.stop();
 });
+
+
+test('a pending identity lookup for a control update does not block the order worker', async () => {
+  const controlStarted = deferred(), releaseControl = deferred(), saved = deferred();
+  const claimed = new Set();
+  const service = factory()({ config, log, pause: paused,
+    repository: {
+      checkSchema: async () => {},
+      claim: async (botId, lane) => {
+        if (claimed.has(lane)) return null;
+        claimed.add(lane);
+        const updateId = lane === 'control' ? 6 : 7;
+        return { update_id: updateId, payload: { update_id: updateId }, attempts: 1 };
+      },
+      complete: async job => { if (job.update_id === 7) saved.resolve(); },
+    },
+    bot: {
+      configureWebhook: async () => true,
+      handleWebhookUpdate: async update => {
+        if (update.update_id === 6) { controlStarted.resolve(); await releaseControl.promise; }
+        else await controlStarted.promise;
+      },
+    },
+  });
+  try { await service.start(); await saved.promise; }
+  finally { releaseControl.resolve(); await service.stop(); }
+  assert.deepEqual([...claimed].sort(), ['control', 'data']);
+});

@@ -8,7 +8,7 @@ function createWebhookService({ repository = inbox, bot = telegram, config = rea
   let status = { state: "stopped", registration: "not_started", last_processed_at: null };
   const safeError = error => String(error?.message || "Webhook error").replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot[REDACTED]").slice(0, 500);
 
-  async function processJob(job) {
+  async function processJob(job, lane) {
     let leaseLost = false;
     const heartbeat = setInterval(() => {
       repository.renew(job).then(ok => { if (!ok) leaseLost = true; }).catch(() => { leaseLost = true; });
@@ -20,7 +20,7 @@ function createWebhookService({ repository = inbox, bot = telegram, config = rea
       if (leaseLost) throw new Error("Lease pesan webhook tidak lagi terkonfirmasi.");
       await repository.complete(job);
       status.last_processed_at = new Date().toISOString();
-      log.log("Update webhook diproses", { update_id: job.update_id, attempts: job.attempts });
+      log.log("Update webhook diproses", { update_id: job.update_id, lane, attempts: job.attempts, inbox_wait_ms: job.inbox_wait_ms });
     } catch (error) {
       const seconds = Math.min(300, 2 ** Math.min(job.attempts, 8));
       await repository.retry(job, safeError(error), seconds);
@@ -28,11 +28,11 @@ function createWebhookService({ repository = inbox, bot = telegram, config = rea
     } finally { clearInterval(heartbeat); }
   }
 
-  async function runWorker(botId, signal) {
+  async function runWorker(botId, signal, lane) {
     while (!signal.aborted) {
       try {
-        const job = await repository.claim(botId);
-        if (job) await processJob(job);
+        const job = await repository.claim(botId, lane);
+        if (job) await processJob(job, lane);
         else await pause(1000, undefined, { signal });
       } catch (error) {
         if (signal.aborted) break;
@@ -46,7 +46,10 @@ function createWebhookService({ repository = inbox, bot = telegram, config = rea
     await repository.checkSchema();
     if (signal.aborted) return;
     status.state = "running";
-    workerTask = runWorker(settings.botId, signal);
+    workerTask = Promise.all([
+      runWorker(settings.botId, signal, "data"),
+      runWorker(settings.botId, signal, "control"),
+    ]);
     log.log("Inbox webhook dan worker aktif; menunggu pendaftaran Telegram. Polling tidak dijalankan.");
     const retries = [2000, 4000, 8000, 16000, 30000];
     for (let attempt = 0; !signal.aborted; attempt++) {

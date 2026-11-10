@@ -329,8 +329,8 @@ async function sendResult(req, res) {
       telegram_message_id ?? null,
       files,
     );
-    const telegramDelivery = await telegramService.notifyOrderResult({ ...result.telegram, order_id: id });
-    if (telegramDelivery.message_id) {
+    const telegramDelivery = await telegramService.notifyOrderResult({ ...result.telegram, order_id: id, result_id: result.result_id });
+    if (telegramDelivery.message_id && !telegramDelivery.outbox_id) {
       try {
         await orderService.markResultTelegramDelivery(
           result.result_id,
@@ -389,7 +389,7 @@ async function completeOrder(req, res) {
         order_id: id,
         content: [content, completedBy && `oleh ${completedBy}`].filter(Boolean).join("\n\n"),
       });
-      if (resultDelivery.message_id) {
+      if (resultDelivery.message_id && !resultDelivery.outbox_id) {
         try {
           await orderService.markResultTelegramDelivery(
             result.telegram.result.result_id,

@@ -17,6 +17,44 @@ function telegramErrorMessage(error) {
     .replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot[REDACTED]");
 }
 
+function deliveryFailure(error) {
+  const code = error?.cause?.code || error?.code;
+  const status = Number(error?.response?.error_code);
+  const beforeTls = code === "ETIMEDOUT" && /Koneksi TLS Telegram melewati batas waktu/.test(String(error?.message));
+  return {
+    error: telegramErrorMessage(error),
+    retry_safe: beforeTls || ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED"].includes(code) || status === 429,
+    rejected: status >= 400 && status < 500,
+    retry_after: Number(error?.response?.parameters?.retry_after) || 0,
+  };
+}
+
+let resultOutbox;
+function getOutbox() {
+  if (process.env.TELEGRAM_OUTBOX_ENABLED !== "true") return null;
+  const botId = process.env.TELEGRAM_BOT_TOKEN?.match(/^(\d+):/)?.[1];
+  if (!botId) throw new Error("Token bot tidak valid untuk antrean pengiriman.");
+  resultOutbox ??= require("./telegram-outbox.service").createOutbox({
+    botId,
+    send: (kind, payload) => kind === "claim" ? deliverOrderClaim(payload)
+      : queueOutgoingMessage(payload.chat_id, payload.thread_id, async () => {
+        const delivery = await deliverOrderResult(payload);
+        if (delivery.message_id && payload.result_id) {
+          try {
+            await orderRepository.markResultTelegramDelivery(payload.result_id, payload.chat_id, delivery.message_id, payload.thread_id);
+          } catch (error) {
+            console.error("ID pengiriman hasil tidak dapat dicatat:", telegramErrorMessage(error));
+          }
+        }
+        realtimeService.emitOrdersChanged();
+        return delivery;
+      }),
+  });
+  return resultOutbox;
+}
+async function startOutbox() { await getOutbox()?.start(); }
+async function stopOutbox() { await resultOutbox?.stop(); }
+
 function positiveInteger(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
@@ -760,17 +798,26 @@ function registerHandlers() {
 async function notifyOrderClaim(claim) {
   if (!bot || !claim.telegram_chat_id || !claim.telegram_message_id) return;
   try {
-    await queueOutgoingMessage(claim.telegram_chat_id, claim.telegram_thread_id, async () => {
-      await trackOutgoingReceipt(claim.telegram_chat_id, claim.telegram_thread_id, async () => {
+    const outbox = getOutbox();
+    if (outbox) return await outbox.deliver(`claim:${claim.order_id}`, "claim", claim);
+    return await deliverOrderClaim(claim);
+  } catch (error) { console.error("Notifikasi claim Telegram gagal:", telegramErrorMessage(error)); }
+}
+async function deliverOrderClaim(claim) {
+  try {
+    return await queueOutgoingMessage(claim.telegram_chat_id, claim.telegram_thread_id, () =>
+      trackOutgoingReceipt(claim.telegram_chat_id, claim.telegram_thread_id, async () => {
         const message = await bot.telegram.sendMessage(claim.telegram_chat_id, `🟡 On progress oleh ${claim.user_name}`, {
           ...(claim.telegram_thread_id ? { message_thread_id: claim.telegram_thread_id } : {}),
           reply_to_message_id: claim.telegram_message_id,
         });
         await rememberOutgoing(claim.order_id, claim.telegram_chat_id, claim.telegram_thread_id, [message.message_id], "claim");
-      });
-    });
+        return { delivered: true, message_id: message.message_id };
+      }));
+  } catch (error) {
+    console.error("Notifikasi claim Telegram gagal:", telegramErrorMessage(error));
+    return { delivered: false, ...deliveryFailure(error) };
   }
-  catch (error) { console.error("Notifikasi claim Telegram gagal:", telegramErrorMessage(error)); }
 }
 
 async function rememberOutgoing(orderId, chatId, threadId, messageIds, kind) {
@@ -802,6 +849,7 @@ function replyOptions(notification) {
 async function sendResultFiles(notification, options, caption) {
   const deliveries = [];
   const errors = [];
+  const failures = [];
 
   const files = notification.files || [];
   // Telegram albums accept 2–10 photos, or 2–10 documents of the same kind.
@@ -814,17 +862,18 @@ async function sendResultFiles(notification, options, caption) {
         media: { source: file.local_path, filename: file.file_name },
         ...(index === 0 && caption ? { caption } : {}),
       })), options));
-      return { deliveries: messages.map((message) => message.message_id), errors };
+      return { deliveries: messages.map((message) => message.message_id), errors, failures };
     } catch (error) {
       // Do not retry as separate messages: an ambiguous API failure could duplicate an album.
       console.error("Pengiriman album Telegram gagal:", telegramErrorMessage(error));
-      return { deliveries, errors: [telegramErrorMessage(error)] };
+      return { deliveries, errors: [telegramErrorMessage(error)], failures: [deliveryFailure(error)] };
     }
   }
 
   for (const [index, file] of files.entries()) {
     if (!file.local_path) {
       errors.push(`${file.file_name || "Lampiran"}: file lokal tidak ditemukan`);
+      failures.push({ retry_safe: false, rejected: true });
       continue;
     }
 
@@ -838,23 +887,35 @@ async function sendResultFiles(notification, options, caption) {
     } catch (error) {
       console.error("Pengiriman lampiran Telegram gagal:", telegramErrorMessage(error));
       errors.push(`${file.file_name || "Lampiran"}: ${telegramErrorMessage(error)}`);
+      failures.push(deliveryFailure(error));
     }
   }
 
-  return { deliveries, errors };
+  return { deliveries, errors, failures };
 }
 
 async function notifyOrderResult(notification) {
   if (!bot || !notification?.chat_id) {
     return { delivered: false, message_id: null, error: "Bot atau tujuan Telegram tidak tersedia" };
   }
-  return queueOutgoingMessage(notification.chat_id, notification.thread_id, () => deliverOrderResult(notification));
+  try {
+    const outbox = getOutbox();
+    if (outbox) {
+      if (!notification.result_id) throw new Error("ID hasil diperlukan untuk antrean Telegram.");
+      return await outbox.deliver(`result:${notification.result_id}`, "result", notification);
+    }
+    return await queueOutgoingMessage(notification.chat_id, notification.thread_id, () => deliverOrderResult(notification));
+  } catch (error) {
+    console.error("Pencatatan pengiriman Telegram gagal:", telegramErrorMessage(error));
+    return { delivered: false, error: telegramErrorMessage(error) };
+  }
 }
 
 async function deliverOrderResult(notification) {
   const options = replyOptions(notification);
   const deliveries = [];
   const errors = [];
+  const failures = [];
   const content = notification.content?.trim();
   const hasFiles = notification.files?.length > 0;
   const useCaption = hasFiles && content && content.length <= 1024;
@@ -869,15 +930,20 @@ async function deliverOrderResult(notification) {
   } catch (error) {
     console.error("Pengiriman result Telegram gagal:", telegramErrorMessage(error));
     errors.push(telegramErrorMessage(error));
+    failures.push(deliveryFailure(error));
   }
 
   const fileDelivery = await sendResultFiles(notification, options, useCaption ? content : undefined);
   deliveries.push(...fileDelivery.deliveries);
   errors.push(...fileDelivery.errors);
+  failures.push(...fileDelivery.failures);
 
   return {
     delivered: deliveries.length > 0 && errors.length === 0,
     partially_delivered: deliveries.length > 0 && errors.length > 0,
+    retry_safe: deliveries.length === 0 && failures.length > 0 && failures.every((error) => error.retry_safe),
+    rejected: deliveries.length === 0 && failures.length > 0 && failures.every((error) => error.rejected),
+    retry_after: Math.max(0, ...failures.map((error) => error.retry_after || 0)),
     message_id: deliveries[0] || null,
     error: errors.length ? errors.join("; ") : null,
   };
@@ -1044,10 +1110,30 @@ function stopPolling(reason) {
 }
 
 
+// Incoming group data needs no bot identity or outbound Telegram request.
+// Control commands still use Telegraf so @username targeting and admin checks remain intact.
 async function handleWebhookUpdate(update) {
   if (TELEGRAM_UPDATE_MODE !== "webhook" || !bot) throw new Error("Bot webhook tidak tersedia.");
+  const message = update.message;
+  const control = /^\/(?:setgrup|help|alarmnodeb|alarmdatin|stopalarmnodeb|stopalarmdatin|alarmstatus)(?:@[^\s]+)?(?:\s|$)|^\/config@[^\s]+(?:\s|$)/i;
+  if (isGroupChat(message?.chat) && !control.test(message.text || "")) {
+    const ctx = {
+      message, chat: message.chat, from: message.from,
+      reply: (text, options) => bot.telegram.sendMessage(message.chat.id, text, options),
+    };
+    const text = (message.text || message.caption || "").trim();
+    const incoming = Boolean(parseIncomingOrder(text));
+    const config = Boolean(parseConfigOrder(text));
+    return handleOrderMessage(ctx, async () => {
+      if (message.photo?.length) {
+        if (incoming || config || !(await ingestOrderReply(ctx))) await ingestPhotoOrder(ctx);
+      } else if (incoming) await ingestIncomingOrder(ctx);
+      else if (config) await ingestConfigOrder(ctx);
+      else await ingestOrderReply(ctx);
+    }, !incoming && !config);
+  }
   if (!handlersRegistered) { registerHandlers(); handlersRegistered = true; }
-  // Resolve identity explicitly: retry a failed getMe without Telegraf caching a rejected promise.
+  // Only control updates need getMe; a failed identity lookup must stay retryable.
   bot.botInfo ??= await bot.telegram.callApi("getMe", {});
   return bot.handleUpdate(update);
 }
@@ -1063,6 +1149,8 @@ async function configureWebhook(config, signal) {
 
 
 module.exports = {
+  startOutbox,
+  stopOutbox,
   getSourcePhoto,
   getConversationMedia,
   sendConversationReply,

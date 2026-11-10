@@ -53,4 +53,17 @@ test('real MySQL webhook migration, deduplication, delayed retry and expired lea
   await repo.complete(next);
   assert.equal(await repo.claim('123'), null);
   assert.equal((await repo.claim('456')).update_id, 7);
+  await repo.enqueue('789', { update_id: 1, callback_query: { id: 'admin' } });
+  await repo.enqueue('789', { update_id: 2, message: { chat: { type: 'supergroup' }, text: '/config@other_bot' } });
+  await repo.enqueue('789', { update_id: 3, message: { chat: { type: 'supergroup' }, text: '/SETGRUP@hdwork_test' } });
+  await repo.enqueue('789', { update_id: 4, message: { chat: { type: 'supergroup' }, text: '#req 123, cek' } });
+  const control = await repo.claim('789', 'control');
+  assert.equal(control.update_id, 1);
+  await repo.retry(control, 'identity timeout', 30);
+  assert.equal(await repo.claim('789', 'control'), null);
+  const data = await repo.claim('789', 'data');
+  assert.equal(data.update_id, 4);
+  assert.ok(Number(data.inbox_wait_ms) >= 0);
+  await repo.complete(data);
+
 });

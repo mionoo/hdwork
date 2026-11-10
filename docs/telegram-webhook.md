@@ -86,7 +86,8 @@ Lalu kirim satu order asli dari grup yang sudah terdaftar, periksa inbox/log, ta
 
 - Unique `(bot_id, update_id)` mencegah inbox ganda dan memisahkan bot berbeda; token tidak disimpan di tabel.
 - HTTP 200 hanya diberikan setelah penyimpanan inbox berhasil. Database gagal menghasilkan 503 agar Telegram mencoba ulang. JSON salah dibalas 400; payload dibatasi 1 MB.
-- Worker memproses update unfinished tertua, satu per satu. Kegagalan dicoba ulang dengan backoff 2–256 detik, dan pesan berikutnya menunggu agar reply tidak mendahului pesan induk. Jika pesan tertua terus gagal, antrean dapat tertahan: periksa `last_error`, jangan menghapusnya tanpa memeriksa dampak pada order.
+- Pesan grup dan perintah bot memakai dua jalur pemrosesan. Order, foto, dan balasan grup tidak perlu `getMe`. Perintah admin dan callback tetap memakai identitas bot dan pemeriksaan hak admin. Retry di jalur perintah tidak menahan jalur order.
+- Setiap jalur memproses update tertua lebih dulu. Kegagalan diulang setelah 2–256 detik. Balasan grup tetap diproses setelah pesan induknya. Jika pesan tertua di jalur data terus gagal, periksa `last_error` dan jangan menghapusnya tanpa memeriksa dampak pada order. Log `inbox_wait_ms` mengukur waktu sejak update disimpan sampai diambil worker, termasuk menunggu retry.
 - Lease 120 detik diperpanjang tiap 30 detik. Setelah proses mati, worker baru dapat melanjutkan setelah lease kedaluwarsa. Update tidak ditandai selesai ketika handler order gagal menyimpan data.
 - Handler webhook tidak memakai timeout Telegraf yang bisa meninggalkan handler async masih berjalan setelah dianggap gagal. Request Telegram tetap memiliki deadline transport. Shutdown server tetap memiliki batas waktu; update belum selesai tetap tersimpan untuk pemulihan.
 - Ini pemrosesan at-least-once. Deduplikasi order/foto/percakapan tetap digunakan ketika worker mengulang. Pengiriman balasan/perintah tidak mempunyai jaminan exactly-once bila proses mati setelah Telegram menerima pesan tetapi sebelum status inbox selesai.
@@ -98,6 +99,31 @@ Pemeriksaan antrean pada database yang benar:
 SELECT status, COUNT(*) AS jumlah FROM telegram_webhook_updates GROUP BY status;
 SELECT bot_id, update_id, status, attempts, next_attempt_at, lease_until, last_error
 FROM telegram_webhook_updates WHERE status <> 'done' ORDER BY update_id LIMIT 20;
+```
+
+## Antrean pengiriman hasil dan claim
+
+Webhook menerima pesan dari Telegram. Pengiriman hasil dan notifikasi claim tetap memakai koneksi keluar ke Bot API. Untuk menyimpan antrean pengiriman di MySQL, jalankan [migrasi outbox](../database/migrations/20261111_telegram_outbox.sql) di database HD Work, lalu tambahkan ke `.env`:
+
+```env
+TELEGRAM_OUTBOX_ENABLED=true
+```
+
+Restart backend setelah migrasi:
+
+```bash
+CACTI_ENABLED=false TELEGRAM_UPDATE_MODE=webhook TELEGRAM_OUTBOX_ENABLED=true pm2 restart hdwork-backend --update-env
+```
+
+Complete Order menunggu hasil percobaan pengiriman pertama seperti sebelumnya. Jika koneksi gagal sebelum TLS tersambung, DNS gagal, koneksi ditolak, atau Telegram merespons 429, percobaan berikutnya disimpan di MySQL dan berjalan setelah jeda, hingga lima percobaan total. Timeout setelah pengiriman mungkin dimulai, pengiriman sebagian, atau restart saat job berstatus `sending` perlu dicek di grup; kasus tersebut tidak dikirim ulang otomatis. Ini berlaku untuk Kirim Hasil, hasil baru saat Complete Order, dan notifikasi claim. Balasan percakapan langsung masih memakai alur yang ada.
+
+Lampiran tetap memerlukan file unggahan yang tersimpan di container. Pertahankan direktori `uploads/results` agar pengiriman ulang setelah restart dapat membaca file. Status `pending` berarti masih menunggu percobaan; `sent` berarti Telegram mengonfirmasi penerimaan; `failed` berarti tujuan berubah, Telegram menolak, atau batas percobaan tercapai; `unknown` perlu diperiksa di grup sebelum mengirim lagi. Koneksi jaringan keluar yang tidak stabil tetap perlu ditangani.
+
+```sql
+SELECT id, kind, job_key, status, attempts, next_attempt_at, last_error
+FROM telegram_outbox
+WHERE status <> 'sent'
+ORDER BY id DESC LIMIT 30;
 ```
 
 ## Kembali ke polling

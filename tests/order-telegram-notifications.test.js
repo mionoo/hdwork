@@ -181,3 +181,18 @@ for (const hasResult of [true, false]) {
     assert.equal(response.data.telegram_delivery.completion.skipped, true);
   });
 }
+
+
+test("only an unambiguous failure before sending can retry the entire result", async () => {
+  const { service, api } = telegram();
+  const tlsFailure = Object.assign(new Error("Koneksi TLS Telegram melewati batas waktu."), { code: "ETIMEDOUT" });
+  api.sendMessage = async () => { throw tlsFailure; };
+  assert.equal((await service.notifyOrderResult(notification)).retry_safe, true);
+  api.sendMessage = async () => { throw Object.assign(new Error("request timed out"), { code: "ETIMEDOUT" }); };
+  assert.equal((await service.notifyOrderResult(notification)).retry_safe, false);
+  api.sendMessage = async () => ({ message_id: 3 });
+  api.sendPhoto = async () => { throw tlsFailure; };
+  const partial = await service.notifyOrderResult({ ...notification, content: "a".repeat(1025), files: [photo] });
+  assert.equal(partial.partially_delivered, true);
+  assert.equal(partial.retry_safe, false);
+});

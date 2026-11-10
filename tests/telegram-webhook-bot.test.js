@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { Telegraf } = require('telegraf');
 
-test('webhook uses real Telegraf order handlers, propagates DB failures for retry, and never polls or drops updates', async () => {
+test('webhook records orders without getMe, propagates DB failures and keeps identity checks for commands', async () => {
   let failIdentity = true, failDatabase = true, saved = 0;
   const calls = [];
   class LocalBot extends Telegraf {
@@ -43,11 +43,13 @@ test('webhook uses real Telegraf order handlers, propagates DB failures for retr
   assert.equal(registration.max_connections, 1);
   assert.deepEqual(registration.allowed_updates, ['message', 'callback_query']);
   const update = { update_id: 7, message: { message_id: 9, date: Math.floor(Date.now() / 1000), chat: { id: -100, type: 'supergroup' }, from: { id: 5, first_name: 'Pelapor' }, caption: '#req 123, cek', photo: [{ file_id: 'large' }] } };
-  await assert.rejects(service.handleWebhookUpdate(update), /identity unavailable/);
+  const admin = { update_id: 6, message: { ...update.message, caption: undefined,
+    photo: undefined, text: '/setgrup@hdwork_test', entities: [{ offset: 0, length: 20, type: 'bot_command' }] } };
+  await assert.rejects(service.handleWebhookUpdate(admin), /identity unavailable/);
   await assert.rejects(service.handleWebhookUpdate(update), /database unavailable/);
   await service.handleWebhookUpdate(update);
   assert.equal(saved, 1);
-  assert.equal(calls.filter(c => c.method === 'getMe').length, 2);
+  assert.equal(calls.filter(c => c.method === 'getMe').length, 1);
   assert.ok(!calls.some(c => ['getUpdates', 'deleteWebhook'].includes(c.method)));
 });
 
