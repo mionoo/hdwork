@@ -25,6 +25,8 @@ function positiveInteger(value, fallback) {
 const bot = process.env.TELEGRAM_BOT_TOKEN
   ? new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
     telegram: { agent: telegramTransport.agent },
+    // Avoid retrying a durable inbox job while a timed-out handler still runs in the background.
+    handlerTimeout: process.env.TELEGRAM_UPDATE_MODE === "webhook" ? Infinity : 90000,
   })
   : null;
 const PERSONAL_ALARM_RATE_PER_SECOND = positiveInteger(process.env.TELEGRAM_PERSONAL_ALARM_RATE_PER_SECOND, 25);
@@ -37,6 +39,7 @@ const POLLING_HEALTHY_WINDOW_MS = 30000;
 const POLLING_HEALTHY_RESPONSES = 3;
 const TELEGRAM_REQUEST_TIMEOUT_MS = 20000;
 const TELEGRAM_POLL_SECONDS = Math.min(50, positiveInteger(process.env.TELEGRAM_POLL_SECONDS, 10));
+const TELEGRAM_UPDATE_MODE = process.env.TELEGRAM_UPDATE_MODE || "polling";
 const TELEGRAM_DEBUG_LOGS = process.env.TELEGRAM_DEBUG_LOGS === "true";
 const TELEGRAM_POLL_TIMEOUT_MS = (TELEGRAM_POLL_SECONDS + 15) * 1000;
 const INCOMING_DATABASE_RETRY_DELAYS = [200, 500, 1000];
@@ -565,6 +568,7 @@ async function handleOrderMessage(ctx, ingest, replyOnly = false) {
       chat_id: ctx.chat.id, message_id: ctx.message?.message_id,
       code: error.code, error: telegramErrorMessage(error), at: new Date().toISOString(),
     });
+    if (TELEGRAM_UPDATE_MODE === "webhook") throw error;
   }
 }
 
@@ -747,7 +751,10 @@ function registerHandlers() {
     bot.action(/^alarmdatin:clear:(\d+)$/, async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; await telegramRepository.clearDatinSubscriptions(ctx.from.id); await renderDatinInstitutionChoices(ctx, Number(ctx.match[1]), true); await ctx.answerCbQuery("Pilihan dikosongkan."); } catch (error) { console.error("Kosongkan /alarmdatin gagal:", telegramErrorMessage(error)); await ctx.answerCbQuery("Gagal mengosongkan pilihan.", { show_alert: true }); } });
     bot.action("alarmdatin:done", async (ctx) => { try { if (!(await ensurePrivateAlarmCallback(ctx))) return; const institutions = await telegramRepository.getDatinSubscriptionNames(ctx.from.id); await ctx.editMessageText(institutions.length ? `✅ Alarm DATIN aktif untuk ${institutions.length} instansi. Gunakan /alarmdatin untuk mengubah pilihan.` : "Belum ada instansi dipilih. Gunakan /alarmdatin untuk memilih."); await ctx.answerCbQuery(); } catch (error) { console.error("Simpan /alarmdatin gagal:", telegramErrorMessage(error)); await ctx.answerCbQuery("Gagal menyimpan pilihan.", { show_alert: true }); } });
   }
-  bot.catch((error) => console.error("Telegraf error:", telegramErrorMessage(error)));
+  bot.catch((error) => {
+    console.error("Telegraf error:", telegramErrorMessage(error));
+    if (TELEGRAM_UPDATE_MODE === "webhook") throw error;
+  });
 }
 
 async function notifyOrderClaim(claim) {
@@ -1011,6 +1018,7 @@ async function runPolling(signal) {
 }
 
 function startPolling() {
+  if (TELEGRAM_UPDATE_MODE !== "polling") return Promise.reject(new Error("Polling tidak boleh dimulai saat mode webhook aktif."));
   if (!bot || pollingTask) return pollingTask;
   if (!handlersRegistered) {
     registerHandlers();
@@ -1036,6 +1044,24 @@ function stopPolling(reason) {
 }
 
 
+async function handleWebhookUpdate(update) {
+  if (TELEGRAM_UPDATE_MODE !== "webhook" || !bot) throw new Error("Bot webhook tidak tersedia.");
+  if (!handlersRegistered) { registerHandlers(); handlersRegistered = true; }
+  // Resolve identity explicitly: retry a failed getMe without Telegraf caching a rejected promise.
+  bot.botInfo ??= await bot.telegram.callApi("getMe", {});
+  return bot.handleUpdate(update);
+}
+
+async function configureWebhook(config, signal) {
+  if (TELEGRAM_UPDATE_MODE !== "webhook" || !bot || pollingTask) throw new Error("Mode bot tidak sesuai untuk webhook.");
+  return bot.telegram.callApi("setWebhook", {
+    url: config.url, secret_token: config.secret,
+    allowed_updates: ["message", "callback_query"], max_connections: 1,
+    drop_pending_updates: false,
+  }, { signal });
+}
+
+
 module.exports = {
   getSourcePhoto,
   getConversationMedia,
@@ -1043,6 +1069,8 @@ module.exports = {
   startPolling,
   stopPolling,
   getPollingStatus,
+  handleWebhookUpdate,
+  configureWebhook,
   notifyOrderClaim,
   notifyOrderResult,
   sendMessage,

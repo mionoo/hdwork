@@ -17,6 +17,8 @@ const { CACTI_ENABLED } = require("./config/features");
 const app = express();
 
 app.use(cors());
+// Verify the webhook secret before parsing payloads; worker processing is asynchronous.
+app.use("/api/telegram", require("./routes/telegram-webhook.routes"));
 // Reject paused integrations before parsing payloads or loading their database services.
 if (!CACTI_ENABLED) {
   app.use(["/api/cactys", "/api/datin-cacti", "/api/datin-sheet"], (req, res) => {

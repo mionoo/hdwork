@@ -26,6 +26,7 @@ test('Cacti requires explicit opt-in', () => {
 for (const enabled of [false, true]) {
   test(`Cacti HTTP routes ${enabled ? 'can be restored explicitly' : 'return 503 before payload parsing and load no integration services'}`, async t => {
     const deps = { express, cors: require('cors'), path, './config/features': { CACTI_ENABLED: enabled } };
+    deps['./routes/telegram-webhook.routes'] = express.Router();
     for (const name of ['order', 'attendance', 'dashboard', 'auth', 'user', 'group', 'agent', 'network']) {
       deps[`./routes/${name}.routes`] = express.Router().get('/', (req, res) => res.json({ ok: true }));
     }

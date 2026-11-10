@@ -1,0 +1,56 @@
+// Optional integration test. Never loads .env or uses the application's database.
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { randomUUID, randomBytes } = require('node:crypto');
+const mysql = require('mysql2/promise');
+
+test('real MySQL webhook migration, deduplication, delayed retry and expired lease fencing', { skip: !process.env.HDWORK_RECONCILE_MYSQL_SOCKET }, async t => {
+  const socketPath = process.env.HDWORK_RECONCILE_MYSQL_SOCKET;
+  assert.ok(socketPath.startsWith('/tmp/hdwork-reconcile-mysql.'), 'Only an isolated test MySQL socket is allowed');
+  const admin = await mysql.createConnection({ socketPath, user: 'root' });
+  const schema = 'hdwork_webhook_test_' + randomBytes(6).toString('hex');
+  let pool;
+  t.after(async () => {
+    if (pool) await pool.end();
+    assert.match(schema, /^hdwork_webhook_test_[0-9a-f]{12}$/);
+    await admin.query(`DROP DATABASE IF EXISTS \`${schema}\``);
+    await admin.end();
+  });
+  await admin.query(`CREATE DATABASE \`${schema}\` CHARACTER SET utf8mb4`);
+  pool = mysql.createPool({ socketPath, user: 'root', database: schema, connectionLimit: 4 });
+  const migration = fs.readFileSync(path.join(__dirname, '../database/migrations/20261111_telegram_webhook_inbox.sql'), 'utf8');
+  await pool.query(migration); await pool.query(migration);
+  const module = { exports: {} };
+  new Function('require', 'module', fs.readFileSync(require.resolve('../src/repositories/telegram-webhook.repository'), 'utf8'))(name => name === '../config/database' ? pool : { randomUUID }, module);
+  const repo = module.exports;
+  await repo.checkSchema();
+  await repo.enqueue('123', { update_id: 7, message: { text: 'original' } });
+  await repo.enqueue('123', { update_id: 7, message: { text: 'duplicate' } });
+  await repo.enqueue('123', { update_id: 8 });
+  await repo.enqueue('456', { update_id: 7 });
+  const [[count]] = await pool.query('SELECT COUNT(*) AS total FROM telegram_webhook_updates');
+  assert.equal(count.total, 3);
+  const first = await repo.claim('123');
+  assert.equal(first.update_id, 7);
+  const payload = typeof first.payload === 'string' ? JSON.parse(first.payload) : first.payload;
+  assert.equal(payload.message.text, 'original');
+  assert.equal(await repo.claim('123'), null);
+  assert.equal(await repo.renew(first), true);
+  await repo.retry(first, 'temporary', 30);
+  assert.equal(await repo.claim('123'), null);
+  await pool.query('UPDATE telegram_webhook_updates SET next_attempt_at = DATE_SUB(NOW(3), INTERVAL 1 SECOND) WHERE id = ?', [first.id]);
+  const second = await repo.claim('123');
+  assert.equal(second.attempts, 2);
+  await pool.query('UPDATE telegram_webhook_updates SET lease_until = DATE_SUB(NOW(3), INTERVAL 1 SECOND) WHERE id = ?', [first.id]);
+  const reclaimed = await repo.claim('123');
+  assert.notEqual(reclaimed.lease_token, second.lease_token);
+  await assert.rejects(repo.complete(second), /Lease/);
+  await repo.complete(reclaimed);
+  const next = await repo.claim('123');
+  assert.equal(next.update_id, 8);
+  await repo.complete(next);
+  assert.equal(await repo.claim('123'), null);
+  assert.equal((await repo.claim('456')).update_id, 7);
+});
