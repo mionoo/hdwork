@@ -253,3 +253,82 @@ test("a successful batch after a network reset retains bounded conflict recovery
     if (expired) assert.match(state.logs.at(-1), /konflik 409/);
   }
 });
+
+test("four failed setup attempts leave the first polling recovery at retry one", async () => {
+  let setups = 0;
+  const { service, state } = fixture({
+    callApi: async method => {
+      if (method === "getMe" && setups++ < 4) {
+        throw Object.assign(new Error("setup down"), { name: "FetchError" });
+      }
+      return {};
+    },
+    poll: async () => {
+      if (state.starts === 1) throw Object.assign(new Error("poll down"), { name: "FetchError" });
+    },
+  });
+  await service.startPolling();
+  assert.equal(state.starts, 2);
+  assert.deepEqual(state.delays, [2000, 4000, 8000, 16000, 2000]);
+  assert.equal(service.getPollingStatus().startup_retries, 0);
+  assert.equal(service.getPollingStatus().recovery_retries, 1);
+  assert.ok(state.logs.some(line => /fase recovery:.*Retry 1\/5/.test(line)));
+});
+
+test("sustained healthy polling replenishes recovery without starting an overlapping loop", async () => {
+  let now = 1000000;
+  class Clock extends Date { static now() { return now; } }
+  let activeLoops = 0;
+  const { service, state } = fixture({
+    date: Clock,
+    callApi: async method => {
+      if (method === "getUpdates") { now += 10000; return []; }
+      return {};
+    },
+    poll: async () => {
+      assert.equal(++activeLoops, 1);
+      try {
+        if (state.starts === 6) {
+          for (let count = 0; count < 3; count++) {
+            await state.client.callApi("getUpdates", { timeout: 50 });
+          }
+          assert.equal(service.getPollingStatus().state, "running");
+          assert.equal(service.getPollingStatus().recovery_retries, 0);
+        }
+        if (state.starts <= 6) throw Object.assign(new Error("poll failed"), { name: "FetchError" });
+      } finally { activeLoops--; }
+    },
+  });
+  await service.startPolling();
+  assert.equal(state.starts, 7);
+  assert.deepEqual(state.delays, [2000, 4000, 8000, 16000, 30000, 2000]);
+  assert.ok(state.logs.some(line => /anggaran retry pemulihan direset/.test(line)));
+  assert.equal(service.getPollingStatus().state, "stopped");
+  assert.equal(service.getPollingStatus().reason, "polling_ended");
+});
+
+test("quick successful polls do not reset persistent failure budgets and stopped status is explicit", async () => {
+  let now = 1000000;
+  class Clock extends Date { static now() { return now; } }
+  const { service, state } = fixture({
+    date: Clock,
+    callApi: async method => {
+      if (method === "getUpdates") { now += 1; return []; }
+      return {};
+    },
+    poll: async () => {
+      for (let count = 0; count < 3; count++) await state.client.callApi("getUpdates", { timeout: 50 });
+      throw Object.assign(new Error("poll failed"), { name: "FetchError" });
+    },
+  });
+  await service.startPolling();
+  assert.equal(state.starts, 6);
+  assert.equal(state.delays.length, 5);
+  const status = service.getPollingStatus();
+  assert.equal(status.state, "stopped");
+  assert.equal(status.reason, "retry_exhausted");
+  assert.equal(status.phase, "recovery");
+  assert.match(state.logs.at(-1), /API tetap berjalan, tetapi polling tidak aktif/);
+  status.state = "tampered";
+  assert.equal(service.getPollingStatus().state, "stopped");
+});

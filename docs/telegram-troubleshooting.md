@@ -70,6 +70,18 @@ Rujukan API: [Node.js 20 HTTPS Agent](https://nodejs.org/docs/latest-v20.x/api/h
 
 `409: terminated by other getUpdates request` berbeda dari HTTP 409 saat claim order. Konflik polling berarti Telegram melihat request polling lain untuk token yang sama. Bisa ada proses lain atau request lama yang belum selesai; log saja tidak cukup membedakannya.
 
-Pemulihan mempertahankan riwayat gangguan polling selama 120 detik, termasuk jika ada satu batch yang berhasil sesudah gangguan. Jika konflik terjadi dalam periode tersebut, backend menunggu minimal durasi long poll ditambah 5 detik (default 15 detik), lalu mencoba lagi dengan budget retry yang sudah ada, maksimal lima retry. Keberhasilan satu batch tidak lagi menghapus riwayat terlalu dini. Konflik tanpa riwayat gangguan baru atau yang terus berulang tetap menghentikan polling; pastikan hanya satu instance mengambil update token yang sama.
+Pemulihan mempertahankan riwayat gangguan polling selama 120 detik, termasuk jika ada satu batch yang berhasil sesudah gangguan. Jika konflik terjadi dalam periode tersebut, backend menunggu minimal durasi long poll ditambah 5 detik (default 15 detik), lalu mencoba lagi dengan anggaran retry pemulihan, maksimal lima retry. Keberhasilan satu batch tidak lagi menghapus riwayat terlalu dini. Konflik tanpa riwayat gangguan baru atau yang terus berulang tetap menghentikan polling; pastikan hanya satu instance mengambil update token yang sama.
 
 Jika log menyatakan polling dihentikan, status PM2 `online` hanya menunjukkan proses API masih hidup. Setelah memeriksa proses duplikat, restart `hdwork-backend` untuk mengaktifkan polling kembali. Jangan mengirim ulang seluruh order lama terlebih dahulu: pesan yang masih tersedia di Telegram dapat diproses sebagai backlog ketika polling pulih.
+
+## Anggaran retry startup dan pemulihan
+
+Startup (`getMe`/`deleteWebhook`) dan pemulihan loop polling kini memiliki penghitung terpisah. Masing-masing menyediakan satu percobaan awal ditambah maksimal lima retry dengan jeda 2, 4, 8, 16, dan 30 detik. Cooldown konflik dan `retry_after` Telegram dapat memperpanjang jeda tersebut.
+
+Contoh: empat kegagalan startup, lalu polling berhasil dimulai, kemudian loop polling gagal. Log pemulihan dimulai dari `Retry 1/5`, bukan `Retry 5/5`. Jika setup ulang untuk recovery gagal, kegagalan itu memakai anggaran startup tanpa menghabiskan retry pemulihan. Setup yang berhasil mereset hanya penghitung startup.
+
+Anggaran pemulihan direset setelah minimal tiga respons long polling berturut-turut berhasil, dengan rentang minimal 30 detik sejak awal request pertama dalam rangkaian itu. Respons kosong saat grup idle ikut dihitung sebagai keberhasilan. Kegagalan request memutus rangkaian sehat. Hanya satu atau beberapa respons yang terlalu cepat tidak mereset anggaran. Loop tidak dijalankan secara paralel saat retry.
+
+Log mencantumkan `fase startup` atau `fase recovery`. Ketika polling berakhir, konflik tidak layak di-retry, atau retry habis, log menyebut `API tetap berjalan, tetapi polling tidak aktif`. Status internal tersedia melalui `getPollingStatus()` untuk pemeriksaan dan integrasi lanjutan, dengan state `disabled`, `starting`, `running`, `degraded`, `retrying`, `stopping`, atau `stopped`, alasan berhenti, jumlah retry, dan waktu respons terakhir. Getter ini tidak memulai polling.
+
+Retry pemulihan di atas berlaku ketika loop polling keluar karena error. Selama loop masih aktif, retry request jaringan di dalam Telegraf tetap berlaku. Tidak ada watchdog yang memulai ulang tanpa batas setelah konflik permanen. Perubahan ini tidak menjamin jaringan Telegram pulih atau mempercepat commit MySQL; fitur order, batas claim, dan Cacti nonaktif tetap mengikuti konfigurasi sebelumnya.

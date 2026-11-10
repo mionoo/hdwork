@@ -33,6 +33,8 @@ const PERSONAL_ALARM_INTERVAL_MS = Math.ceil(1000 / PERSONAL_ALARM_RATE_PER_SECO
 const DATIN_INSTITUTIONS_PER_PAGE = 8;
 const POLLING_RETRY_DELAYS = [2000, 4000, 8000, 16000, 30000];
 const POLLING_REQUEST_TIMEOUT_MS = 10000;
+const POLLING_HEALTHY_WINDOW_MS = 30000;
+const POLLING_HEALTHY_RESPONSES = 3;
 const TELEGRAM_REQUEST_TIMEOUT_MS = 20000;
 const TELEGRAM_POLL_SECONDS = Math.min(50, positiveInteger(process.env.TELEGRAM_POLL_SECONDS, 10));
 const TELEGRAM_DEBUG_LOGS = process.env.TELEGRAM_DEBUG_LOGS === "true";
@@ -46,6 +48,30 @@ let handlersRegistered = false;
 let pollingTask;
 let pollingController;
 let pollingActive = false;
+let pollingSession;
+let pollingStatus = {
+  state: bot ? "stopped" : "disabled", phase: null,
+  startup_retries: 0, recovery_retries: 0,
+  last_success_at: null, last_error: null, reason: null,
+};
+
+function getPollingStatus() { return { ...pollingStatus }; }
+function setPollingStatus(state, details = {}) {
+  pollingStatus = { ...pollingStatus, state, ...details };
+}
+
+function recordPollingSuccess(startedAt) {
+  if (!pollingSession) return;
+  const now = Date.now();
+  pollingSession.healthySince ??= startedAt;
+  pollingSession.responses += 1;
+  setPollingStatus("running", { phase: "recovery", last_success_at: new Date(now).toISOString(), last_error: null });
+  if (!pollingSession.healthy && pollingSession.responses >= POLLING_HEALTHY_RESPONSES
+      && now - pollingSession.healthySince >= POLLING_HEALTHY_WINDOW_MS) {
+    pollingSession.healthy = true;
+    pollingSession.onHealthy();
+  }
+}
 // Keep recent failures through a successful batch: the previous remote poll may still be ending.
 let lastPollingConnectionFailureAt = 0;
 let previousPollFinishedAt = 0;
@@ -122,6 +148,7 @@ function limitTelegramRequests(telegram) {
     try {
       const response = await callApi(method, requestPayload, { ...options, signal: controller.signal });
       if (longPolling) {
+        recordPollingSuccess(startedAt);
         if (TELEGRAM_DEBUG_LOGS && response.length) console.log("Batch Telegram diterima", {
           updates: response.length, request_ms: Date.now() - startedAt,
           poll_gap_ms: gap, at: new Date().toISOString(),
@@ -129,6 +156,12 @@ function limitTelegramRequests(telegram) {
       }
       return response;
     } catch (error) {
+      if (longPolling && pollingSession && !signal?.aborted) {
+        pollingSession.healthySince = null;
+        pollingSession.responses = 0;
+        pollingSession.healthy = false;
+        setPollingStatus("degraded", { last_error: telegramErrorMessage(error) });
+      }
       if (longPolling && (timedOut || ["ETIMEDOUT", "ECONNRESET", "ECONNREFUSED"].includes(error.code))) {
         lastPollingConnectionFailureAt = Date.now();
       }
@@ -903,18 +936,29 @@ async function sendPersonalAlarmMessage(chatId, text) {
 }
 
 async function runPolling(signal) {
-  for (let attempt = 0; !signal.aborted; attempt += 1) {
+  let startupRetries = 0;
+  let recoveryRetries = 0;
+  while (!signal.aborted) {
+    let phase = "startup";
     try {
-      const startupRequest = () => ({
-        signal,
-      });
-      bot.botInfo ??= await bot.telegram.callApi("getMe", {}, startupRequest());
+      setPollingStatus("starting", { phase, reason: null });
+      bot.botInfo ??= await bot.telegram.callApi("getMe", {}, { signal });
       signal.throwIfAborted();
-      await bot.telegram.callApi("deleteWebhook", {}, startupRequest());
+      await bot.telegram.callApi("deleteWebhook", {}, { signal });
       signal.throwIfAborted();
-
-      // Telegraf 4's launch couples network setup and the long-lived polling loop.
-      // Start that same loop after the abortable setup to avoid starting during shutdown.
+      // Setup success replenishes only the setup budget, never the recovery budget.
+      startupRetries = 0;
+      phase = "recovery";
+      pollingSession = {
+        healthySince: null, responses: 0, healthy: false,
+        onHealthy() {
+          if (recoveryRetries) console.log("Koneksi polling Telegram stabil; anggaran retry pemulihan direset.");
+          recoveryRetries = 0;
+          setPollingStatus("running", { recovery_retries: 0 });
+        },
+      };
+      setPollingStatus("starting", { phase, startup_retries: 0 });
+      // Setup and polling remain sequential; only one polling loop is active.
       const polling = bot.startPolling();
       pollingActive = true;
       console.log(`🤖 Polling Telegram dimulai (IPv4, keep-alive, timeout ${TELEGRAM_POLL_SECONDS} detik)`);
@@ -922,30 +966,43 @@ async function runPolling(signal) {
         await polling;
       } finally {
         pollingActive = false;
+        pollingSession = undefined;
       }
+      setPollingStatus("stopped", { reason: signal.aborted ? "shutdown" : "polling_ended" });
+      if (!signal.aborted) console.error("Polling Telegram berakhir. API tetap berjalan, tetapi polling tidak aktif.");
       return;
     } catch (error) {
+      pollingSession = undefined;
       if (signal.aborted) return;
+      const message = telegramErrorMessage(error);
       const code = error.code;
       const timeoutConflict = code === 409 && lastPollingConnectionFailureAt > 0
         && Date.now() - lastPollingConnectionFailureAt < 120000;
       if (code === 409 && !timeoutConflict) {
-        console.error("Polling Telegram dihentikan karena konflik 409. Periksa proses lain yang memakai token bot yang sama.", error.description || error.response?.description || "");
+        setPollingStatus("stopped", { phase, reason: "conflict", last_error: message });
+        console.error("Polling Telegram dihentikan karena konflik 409. Periksa proses lain yang memakai token bot yang sama. API tetap berjalan, tetapi polling tidak aktif.", message);
         return;
       }
 
-      const retryDelay = POLLING_RETRY_DELAYS[attempt];
+      const retries = phase === "startup" ? startupRetries : recoveryRetries;
+      const retryDelay = POLLING_RETRY_DELAYS[retries];
       const temporary = ["FetchError", "AbortError", "TimeoutError"].includes(error.name)
         || timeoutConflict || code === 429 || (typeof code === "number" && code >= 500);
       if (!temporary || retryDelay === undefined) {
-        console.error(`Polling Telegram gagal setelah ${attempt + 1} percobaan: ${telegramErrorMessage(error)}`);
+        setPollingStatus("stopped", { phase, reason: temporary ? "retry_exhausted" : "fatal_error", last_error: message });
+        console.error(`Polling Telegram berhenti pada fase ${phase} setelah ${retries + 1} percobaan: ${message}. API tetap berjalan, tetapi polling tidak aktif.`);
         return;
       }
 
+      if (phase === "startup") startupRetries += 1;
+      else recoveryRetries += 1;
+      setPollingStatus("retrying", {
+        phase, startup_retries: startupRetries, recovery_retries: recoveryRetries, last_error: message,
+      });
       const retryAfter = code === 429 ? Number(error.parameters?.retry_after) * 1000 || 0 : 0;
       const conflictCooldown = timeoutConflict ? (TELEGRAM_POLL_SECONDS + 5) * 1000 : 0;
       const waitMs = Math.max(retryDelay, retryAfter, conflictCooldown);
-      console.warn(`Polling Telegram gagal: ${telegramErrorMessage(error)}. Retry ${attempt + 1}/${POLLING_RETRY_DELAYS.length} dalam ${waitMs / 1000} detik.`);
+      console.warn(`Polling Telegram gagal pada fase ${phase}: ${message}. Retry ${retries + 1}/${POLLING_RETRY_DELAYS.length} dalam ${waitMs / 1000} detik.`);
       await delay(waitMs, undefined, { signal }).catch((error) => {
         if (!signal.aborted) throw error;
       });
@@ -959,8 +1016,11 @@ function startPolling() {
     registerHandlers();
     handlersRegistered = true;
   }
+  setPollingStatus("starting", { phase: "startup", startup_retries: 0, recovery_retries: 0, reason: null, last_error: null });
   pollingController = new AbortController();
   pollingTask = runPolling(pollingController.signal).finally(() => {
+    if (pollingController.signal.aborted) setPollingStatus("stopped", { reason: "shutdown" });
+    pollingSession = undefined;
     pollingTask = undefined;
     pollingController = undefined;
   });
@@ -969,6 +1029,7 @@ function startPolling() {
 
 function stopPolling(reason) {
   if (!pollingController || pollingController.signal.aborted) return pollingTask;
+  setPollingStatus("stopping", { reason: "shutdown" });
   pollingController.abort();
   if (pollingActive) bot.stop(reason);
   return pollingTask;
@@ -981,6 +1042,7 @@ module.exports = {
   sendConversationReply,
   startPolling,
   stopPolling,
+  getPollingStatus,
   notifyOrderClaim,
   notifyOrderResult,
   sendMessage,
