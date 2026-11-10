@@ -29,17 +29,18 @@ function createOutbox({ repo = repository, send, botId, log = console, delay = p
       const seconds = Math.max(Number(delivery.retry_after) || 0, 2 ** Number(job.attempts));
       await repo.settle(job, status, delivery, retry ? seconds : 0);
       if (status !== 'sent') log.warn('Pengiriman Telegram belum selesai', {
-        outbox_id: job.id, kind: job.kind, status, attempts: job.attempts,
+        outbox_id: job.id, job_key: job.job_key, status, attempts: job.attempts,
         ...(retry ? { retry_seconds: seconds } : {}),
       });
       return { ...delivery, outbox_id: job.id, delivery_status: status, pending: retry };
     } catch (error) {
-      log.error('Status pengiriman Telegram perlu diperiksa:', safeError(error));
+      log.error('Status pengiriman Telegram perlu diperiksa', { outbox_id: job.id, job_key: job.job_key, error: safeError(error) });
       return { delivered: false, outbox_id: job.id, delivery_status: 'unknown', error: safeError(error) };
     } finally { clearInterval(heartbeat); }
   }
-  async function deliver(key, kind, payload) {
-    const stored = await repo.enqueue(botId, key, kind, payload);
+  async function deliver(key, kind, payload, { alreadyQueued = false } = {}) {
+    const stored = alreadyQueued ? await repo.find(botId, key) : await repo.enqueue(botId, key, kind, payload);
+    if (!stored) throw new Error('Entri pengiriman Telegram tidak ditemukan.');
     if (stored.status !== 'pending') {
       const delivery = typeof stored.delivery === 'string' ? JSON.parse(stored.delivery) : stored.delivery;
       return { ...delivery, delivered: stored.status === 'sent', pending: stored.status === 'sending',

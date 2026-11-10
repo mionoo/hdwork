@@ -1,6 +1,14 @@
 //order.repository.js
 
 const pool = require("../config/database");
+const { formatCompletionResult } = require("../config/telegram");
+
+async function queueOrderNotification(connection, key, kind, payload, delaySeconds) {
+  if (process.env.TELEGRAM_OUTBOX_ENABLED !== "true") return false;
+  const outbox = require("./telegram-outbox.repository");
+  await outbox.enqueueWithOrder(connection, key, kind, payload, delaySeconds);
+  return true;
+}
 
 async function getAllOrders(filters = {}) {
   const { status, city_id, segment_id, user_id, allowed_segment_ids, telegram_group_id, telegram_group_ids } = filters;
@@ -342,10 +350,7 @@ async function claimOrder(orderId, userId) {
       [userId, orderId],
     );
 
-    // 14. Simpan seluruh transaksi
-    await connection.commit();
-
-    return {
+    const result = {
       order_id: Number(orderId),
       user_id: Number(userId),
       user_name: user.name,
@@ -354,6 +359,11 @@ async function claimOrder(orderId, userId) {
       telegram_message_id: order.telegram_message_id,
       telegram_thread_id: order.telegram_thread_id,
     };
+    if (result.telegram_chat_id && result.telegram_message_id) {
+      result.telegram_queued = await queueOrderNotification(connection, `claim:${result.order_id}`, "claim", result);
+    }
+    await connection.commit();
+    return result;
   } catch (error) {
     await connection.rollback();
     throw error;
@@ -1014,9 +1024,7 @@ async function sendResult(
       [orderId],
     );
 
-    await connection.commit();
-
-    return {
+    const result = {
       result_id: Number(resultInsert.insertId),
       order_id: Number(orderId),
       user_id: Number(userId),
@@ -1031,6 +1039,13 @@ async function sendResult(
         files,
       },
     };
+    if (result.telegram.chat_id) {
+      result.telegram_queued = await queueOrderNotification(connection, `result:${result.result_id}`, "result", {
+        ...result.telegram, order_id: result.order_id, result_id: result.result_id,
+      }, 30);
+    }
+    await connection.commit();
+    return result;
   } catch (error) {
     await connection.rollback();
     throw error;
@@ -1282,9 +1297,7 @@ async function completeOrder(orderId, userId, completionResult = {}) {
       [orderId],
     );
 
-    await connection.commit();
-
-    return {
+    const result = {
       order_id: Number(orderId),
       user_id: Number(userId),
       status: "DONE",
@@ -1296,6 +1309,15 @@ async function completeOrder(orderId, userId, completionResult = {}) {
         result: createdResult,
       },
     };
+    if (createdResult && result.telegram.chat_id) {
+      const { result: savedResult, ...target } = result.telegram;
+      result.telegram_queued = await queueOrderNotification(connection, `result:${savedResult.result_id}`, "result", {
+        ...target, ...savedResult, order_id: result.order_id,
+        content: formatCompletionResult(savedResult.content, target.user_name),
+      }, 30);
+    }
+    await connection.commit();
+    return result;
   } catch (error) {
     await connection.rollback();
     throw error;

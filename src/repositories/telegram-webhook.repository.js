@@ -21,27 +21,26 @@ async function claim(botId, lane) {
     '^/(setgrup|help|alarmnodeb|alarmdatin|stopalarmnodeb|stopalarmdatin|alarmstatus)(@[^[:space:]]+)?([[:space:]]|$)|^/config@[^[:space:]]+([[:space:]]|$)' OR
     COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.message.chat.type')), '') NOT IN ('group', 'supergroup'))`;
   const laneFilter = lane ? ` AND (${control}) = ?` : "";
-  const connection = await pool.getConnection();
-  try {
-    await connection.beginTransaction();
-    // Keep the oldest unfinished update first, including during retry, so replies
-    // do not overtake a failed parent. A restarted worker reclaims expired leases.
-    const [[row]] = await connection.query(
-      `SELECT *, TIMESTAMPDIFF(MICROSECOND, received_at, NOW(3)) DIV 1000 AS inbox_wait_ms,
-       (next_attempt_at <= NOW(3) AND (lease_until IS NULL OR lease_until <= NOW(3))) AS ready
-       FROM telegram_webhook_updates WHERE bot_id = ? AND status <> 'done'${laneFilter}
-       ORDER BY update_id LIMIT 1 FOR UPDATE`, lane ? [botId, Number(lane === 'control')] : [botId],
-    );
-    if (!row || Number(row.ready) !== 1) { await connection.commit(); return null; }
-    const lease = randomUUID();
-    await connection.query(
-      `UPDATE telegram_webhook_updates SET status = 'processing', attempts = attempts + 1,
-       lease_token = ?, lease_until = DATE_ADD(NOW(3), INTERVAL 120 SECOND) WHERE id = ?`, [lease, row.id],
-    );
-    await connection.commit();
-    return { ...row, lease_token: lease, attempts: Number(row.attempts) + 1 };
-  } catch (error) { await connection.rollback(); throw error; }
-  finally { connection.release(); }
+  const ready = "next_attempt_at <= NOW(3) AND (lease_until IS NULL OR lease_until <= NOW(3))";
+  // Inspect the oldest unfinished row even when it is in backoff. Replies must
+  // remain behind their parent. Only the selected primary key needs a write lock.
+  const [[row]] = await pool.query(
+    `SELECT *, TIMESTAMPDIFF(MICROSECOND, received_at, NOW(3)) DIV 1000 AS inbox_wait_ms,
+      (${ready}) AS ready
+     FROM telegram_webhook_updates WHERE bot_id = ? AND status <> 'done'${laneFilter}
+     ORDER BY update_id LIMIT 1`, lane ? [botId, Number(lane === 'control')] : [botId],
+  );
+  if (!row || Number(row.ready) !== 1) return null;
+
+  const lease = randomUUID();
+  const [claimed] = await pool.query(
+    `UPDATE telegram_webhook_updates SET status = 'processing', attempts = attempts + 1,
+      lease_token = ?, lease_until = DATE_ADD(NOW(3), INTERVAL 120 SECOND)
+     WHERE id = ? AND attempts = ? AND status <> 'done' AND ${ready}`,
+    [lease, row.id, row.attempts],
+  );
+  if (claimed.affectedRows !== 1) return null;
+  return { ...row, lease_token: lease, attempts: Number(row.attempts) + 1 };
 }
 
 async function renew(job) {

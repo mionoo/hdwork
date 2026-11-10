@@ -32,8 +32,8 @@ test('outbox migration, retry after restart, duplicate fencing and ambiguous del
   await pool.query("INSERT INTO orders VALUES (42, 1, -100, 'IN_PROGRESS', 18)");
   await pool.query('INSERT INTO order_results VALUES (2, 42), (3, 42), (4, 42)');
   const loaded = { exports: {} };
-  new Function('require', 'module', fs.readFileSync(require.resolve('../src/repositories/telegram-outbox.repository'), 'utf8'))(
-    name => name === '../config/database' ? pool : { randomUUID }, loaded);
+  new Function('require', 'module', 'process', fs.readFileSync(require.resolve('../src/repositories/telegram-outbox.repository'), 'utf8'))(
+    name => name === '../config/database' ? pool : name === 'node:crypto' ? { randomUUID } : require(name), loaded, { env: { TELEGRAM_BOT_TOKEN: '123:test' } });
   const repo = loaded.exports;
   const botId = '123';
   const payload = { order_id: 42, result_id: 2, chat_id: -100, thread_id: 7, content: 'Hasil' };
@@ -43,7 +43,17 @@ test('outbox migration, retry after restart, duplicate fencing and ambiguous del
     attempts++;
     return { delivered: false, error: 'TLS belum tersambung', retry_safe: true, retry_after: 30 };
   } });
-  const first = await outbox.deliver('result:2', 'result', payload);
+  const transaction = await pool.getConnection();
+  try {
+    await transaction.beginTransaction();
+    await repo.enqueueWithOrder(transaction, 'result:2', 'result', payload, 30);
+    await transaction.rollback();
+    assert.equal(await repo.find(botId, 'result:2'), undefined);
+    await transaction.beginTransaction();
+    await repo.enqueueWithOrder(transaction, 'result:2', 'result', payload, 30);
+    await transaction.commit();
+  } finally { transaction.release(); }
+  const first = await outbox.deliver('result:2', 'result', payload, { alreadyQueued: true });
   assert.equal(first.delivery_status, 'pending');
   assert.equal(attempts, 1);
   assert.equal(await repo.claim(botId), null, 'backoff holds the job');
@@ -74,7 +84,9 @@ test('outbox migration, retry after restart, duplicate fencing and ambiguous del
   assert.equal((await uncertain.deliver('result:3', 'result', { ...payload, result_id: 3 })).delivery_status, 'unknown');
   assert.equal(await repo.claim(botId), null, 'ambiguous delivery is never retried');
   const interrupted = await repo.enqueue(botId, 'result:4', 'result', { ...payload, result_id: 4 });
-  const lease = await repo.claim(botId, interrupted.id);
+  const contenders = await Promise.all(Array.from({ length: 4 }, () => repo.claim(botId, interrupted.id)));
+  assert.equal(contenders.filter(Boolean).length, 1);
+  const lease = contenders.find(Boolean);
   await pool.query('UPDATE telegram_outbox SET lease_until = DATE_SUB(NOW(3), INTERVAL 1 SECOND) WHERE id = ?', [lease.id]);
   assert.equal(await repo.claim(botId), null);
   await assert.rejects(repo.settle(lease, 'sent', { delivered: true }), /Lease/);

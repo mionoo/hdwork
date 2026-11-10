@@ -1,4 +1,5 @@
 const { unlink } = require("node:fs/promises");
+const { formatCompletionResult } = require("../config/telegram");
 const orderService = require("../services/order.service");
 const telegramService = require("../services/telegram.service");
 const realtimeService = require("../services/realtime.service");
@@ -181,7 +182,7 @@ async function claimOrder(req, res) {
 
     const result = await orderService.claimOrder(id, userId);
 
-    telegramService.notifyOrderClaim(result);
+    if (!result.telegram_queued) void telegramService.notifyOrderClaim(result);
     realtimeService.emitOrdersChanged();
 
     return res.status(200).json({
@@ -329,7 +330,10 @@ async function sendResult(req, res) {
       telegram_message_id ?? null,
       files,
     );
-    const telegramDelivery = await telegramService.notifyOrderResult({ ...result.telegram, order_id: id, result_id: result.result_id });
+    const telegramDelivery = await telegramService.notifyOrderResult(
+      { ...result.telegram, order_id: id, result_id: result.result_id },
+      { alreadyQueued: result.telegram_queued },
+    );
     if (telegramDelivery.message_id && !telegramDelivery.outbox_id) {
       try {
         await orderService.markResultTelegramDelivery(
@@ -381,14 +385,12 @@ async function completeOrder(req, res) {
     });
     let resultDelivery = null;
     if (result.telegram.result) {
-      const content = result.telegram.result.content?.trim();
-      const completedBy = result.telegram.user_name?.trim();
       resultDelivery = await telegramService.notifyOrderResult({
         ...result.telegram,
         ...result.telegram.result,
         order_id: id,
-        content: [content, completedBy && `oleh ${completedBy}`].filter(Boolean).join("\n\n"),
-      });
+        content: formatCompletionResult(result.telegram.result.content, result.telegram.user_name),
+      }, { alreadyQueued: result.telegram_queued });
       if (resultDelivery.message_id && !resultDelivery.outbox_id) {
         try {
           await orderService.markResultTelegramDelivery(

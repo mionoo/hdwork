@@ -32,7 +32,9 @@ test('real MySQL webhook migration, deduplication, delayed retry and expired lea
   await repo.enqueue('456', { update_id: 7 });
   const [[count]] = await pool.query('SELECT COUNT(*) AS total FROM telegram_webhook_updates');
   assert.equal(count.total, 3);
-  const first = await repo.claim('123');
+  const candidates = await Promise.all(Array.from({ length: 4 }, () => repo.claim('123')));
+  assert.equal(candidates.filter(Boolean).length, 1);
+  const first = candidates.find(Boolean);
   assert.equal(first.update_id, 7);
   const payload = typeof first.payload === 'string' ? JSON.parse(first.payload) : first.payload;
   assert.equal(payload.message.text, 'original');

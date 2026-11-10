@@ -76,6 +76,7 @@ test("multi-room orders require access to every selected group", async () => {
 
 test("multi-room query binds group IDs and excludes unavailable groups", async () => {
   const repo = load("src/repositories/order.repository.js", {
+    "../config/telegram": require("../src/config/telegram"),
     "../config/database": { query: async (sql, params) => {
       assert.match(sql, /tg\.id IN \(\?,\?\) AND tg\.is_active = 1 AND tg\.archived_at IS NULL/);
       assert.equal(JSON.stringify(params), "[12,14,4,2]");

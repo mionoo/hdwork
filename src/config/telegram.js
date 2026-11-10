@@ -15,4 +15,9 @@ function readTelegramConfig(env = process.env) {
   if (!botId) throw new Error("Token bot diperlukan untuk mode webhook.");
   return { mode, secret, url: url.href, botId };
 }
-module.exports = { readTelegramConfig, WEBHOOK_PATH };
+function formatCompletionResult(content, userName) {
+  const name = userName?.trim();
+  return [content?.trim(), name && `oleh ${name}`].filter(Boolean).join("\n\n");
+}
+
+module.exports = { readTelegramConfig, WEBHOOK_PATH, formatCompletionResult };
