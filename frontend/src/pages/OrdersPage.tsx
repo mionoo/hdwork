@@ -35,11 +35,11 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 
+import { useOrderCompletion } from "@/contexts/OrderCompletionContext"
 import { useAuth } from "@/contexts/AuthContext"
 
 import {
   claimOrder,
-  completeOrder,
   getOrderRawMessage,
   getOrderDetail,
   getOrders,
@@ -67,6 +67,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
   monitorEmptyMessage?: string
 }) {
   const { token, user } = useAuth()
+  const { pending, notice: completionNotice, complete: completeTrackedOrder } = useOrderCompletion()
   const navigate = useNavigate()
 
   const [orders, setOrders] =
@@ -146,6 +147,14 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
     knownOrderIds.current = null
     loadOrders()
   }, [token, scope])
+
+  const previousPendingIds = useRef(new Set(pending.map((entry) => entry.order.id)))
+  useEffect(() => {
+    const currentIds = new Set(pending.map((entry) => entry.order.id))
+    const settled = [...previousPendingIds.current].some((id) => !currentIds.has(id))
+    previousPendingIds.current = currentIds
+    if (settled) void loadOrders()
+  }, [pending, token, scope])
 
   useEffect(() => {
     if (!token || !scope) return
@@ -303,14 +312,13 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
     try {
       setQuickActionLoading(true)
       setQuickCompleteError("")
-      const result = await completeOrder(token, quickCompleteOrder.id, needsResult ? quickCompleteContent.trim() : "", needsResult ? quickCompleteFiles : [])
+      setSuccessMessage("")
+      setDeliveryWarning("")
+      await completeTrackedOrder(quickCompleteOrder, needsResult ? quickCompleteContent.trim() : "", needsResult ? quickCompleteFiles : [])
       setQuickCompleteOrder(null)
       setQuickCompleteDetail(null)
       setSelectedMessage(null)
       setSelectedOrder(null)
-      setDeliveryWarning(result.telegram_delivery?.result?.delivered === false
-        ? `Order #${quickCompleteOrder.id} sudah selesai, tetapi pengiriman hasil ke Telegram belum terkonfirmasi. Periksa grup sebelum mengirim ulang.` : "")
-      setSuccessMessage(result.telegram_delivery?.result?.delivered === false ? "" : result.message || `Order #${quickCompleteOrder.id} berhasil diselesaikan`)
       await loadOrders()
     } catch (error) {
       setQuickCompleteError(error instanceof Error ? error.message : "Gagal menyelesaikan order")
@@ -319,7 +327,14 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
     }
   }
 
-  const visibleOrders = orders.filter((order) => order.status !== "DONE")
+  const groupIds = new Set(scope?.split(",").map(Number) ?? [])
+  const pendingInScope = new Map(pending.filter((entry) => groupIds.has(Number(entry.order.telegram_group_id)))
+    .map((entry) => [entry.order.id, entry]))
+  const displayedOrders = orders.map((order) => pendingInScope.get(order.id)?.order ?? order)
+  for (const entry of pendingInScope.values()) {
+    if (!displayedOrders.some((order) => order.id === entry.order.id)) displayedOrders.unshift(entry.order)
+  }
+  const visibleOrders = displayedOrders.filter((order) => order.status !== "DONE" || pendingInScope.has(order.id))
   const countsByGroup = new Map<number, number>()
   if (monitoredGroups) {
     for (const order of visibleOrders) {
@@ -327,7 +342,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
       countsByGroup.set(groupId, (countsByGroup.get(groupId) ?? 0) + 1)
     }
   }
-  const canQuickAction = (order: Order) => user?.role === "HD"
+  const canQuickAction = (order: Order) => !pending.some((entry) => entry.order.id === order.id) && user?.role === "HD"
     && order.performance_owner_id === user.id
     && (order.status === "IN_PROGRESS" || order.status === "ESCALATED")
 
@@ -366,6 +381,15 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
         {deliveryWarning && (
           <p role="alert" className="rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">
             {deliveryWarning}
+          </p>
+        )}
+
+        {completionNotice && groupIds.has(Number(completionNotice.order.telegram_group_id)) && (
+          <p role={completionNotice.warning ? "alert" : "status"}
+            className={completionNotice.warning
+              ? "rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300"
+              : "rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-400"}>
+            {completionNotice.message}
           </p>
         )}
 
@@ -474,7 +498,11 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
                       </td>
 
                       <td className="p-3">
-                        <OrderStatusBadge status={order.status} />
+                        {pendingInScope.has(order.id)
+                          ? <span role="status" className="text-sm font-medium text-primary whitespace-nowrap">
+                              {pendingInScope.get(order.id)?.awaitingTelegram ? "Mengirim hasil…" : "Menyelesaikan…"}
+                            </span>
+                          : <OrderStatusBadge status={order.status} />}
                       </td>
 
                       <td className="p-3 whitespace-nowrap text-muted-foreground">
@@ -508,7 +536,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
                         <Button
                           size="icon-sm"
                           variant="outline"
-                          disabled={messageLoadingId === order.id}
+                          disabled={messageLoadingId === order.id || pendingInScope.has(order.id)}
                           onClick={() => handleOpenMessage(order)}
                           aria-label={`Lihat pesan order #${order.id}${Number(order.unread_reply_count) > 0 ? `, ${order.unread_reply_count} balasan baru` : ""}`}
                           title={Number(order.unread_reply_count) > 0 ? `${order.unread_reply_count} balasan baru` : "Lihat pesan asli"}
@@ -524,6 +552,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
                         <Button
                           size="sm"
                           variant="outline"
+                          disabled={pendingInScope.has(order.id)}
                           onClick={() =>
                             navigate(
                               `/orders/${order.id}`,
@@ -674,7 +703,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
             <DialogDescription>
               {quickCompleteDetail?.results.length === 0
                 ? "Tambahkan hasil pekerjaan sebelum menyelesaikan order."
-                : "Tandai order ini selesai. Notifikasi akan dikirim ke Telegram."}
+                : "Tandai order ini selesai. Hasil yang sudah dikirim tidak akan dikirim ulang."}
             </DialogDescription>
           </DialogHeader>
           <form
@@ -710,6 +739,11 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
               </>
             )}
             {quickCompleteError && <p className="text-sm text-destructive">{quickCompleteError}</p>}
+            {quickCompleteOrder && pendingInScope.has(quickCompleteOrder.id) && (
+              <p role="status" className="text-sm text-muted-foreground">
+                Menunggu hasil penyelesaian. Order tetap ditampilkan sampai pengiriman selesai atau terjadi timeout.
+              </p>
+            )}
             <DialogFooter>
               <Button type="button" variant="outline" disabled={quickActionLoading} onClick={() => { setQuickCompleteOrder(null); setQuickCompleteDetail(null) }}>Batal</Button>
               <Button type="submit" disabled={quickActionLoading}>{quickActionLoading ? "Memproses..." : "Ya, Selesaikan"}</Button>

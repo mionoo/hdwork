@@ -1341,6 +1341,8 @@ async function getOrderDetail(orderId) {
 
     u.name AS performance_owner_name,
 
+    tg.id AS telegram_group_id,
+    tg.category AS telegram_group_category,
     tg.name AS telegram_group,
 
     tg.city_id,

@@ -15,12 +15,12 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import OrderStatusBadge from "@/components/OrderStatusBadge";
 
+import { useOrderCompletion } from "@/contexts/OrderCompletionContext";
 import { useAuth } from "@/contexts/AuthContext";
 import OrderSourcePhotos from "@/components/OrderSourcePhotos";
 import OrderTelegramConversation from "@/components/OrderTelegramConversation";
 
 import {
-  completeOrder,
   escalateOrder,
   getOrderDetail,
   latestIncomingReplyId,
@@ -43,7 +43,9 @@ function formatDateTime(value: string | null | undefined) {
 
 export default function OrderDetailPage() {
   const { token, user } = useAuth();
+  const { pending, notice: completionNotice, complete: completeTrackedOrder } = useOrderCompletion();
   const { id } = useParams();
+  const isCompleting = pending.some((entry) => entry.order.id === Number(id));
   const navigate = useNavigate();
   const { roomId, monitoring } = useLocation().state ?? {};
 
@@ -366,9 +368,9 @@ export default function OrderDetailPage() {
   async function handleComplete(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!token || !id) return;
+    if (!token || !id || !detail || isCompleting) return;
 
-    const needsResult = detail?.results.length === 0;
+    const needsResult = detail.results.length === 0;
 
     if (needsResult && !completeContent.trim() && completeFiles.length === 0) {
       setCompleteError("Isi hasil pekerjaan atau pilih minimal satu file");
@@ -379,15 +381,13 @@ export default function OrderDetailPage() {
       setActionLoading(true);
       setCompleteError("");
 
-      const result = await completeOrder(
-        token,
-        Number(id),
+      setDeliveryWarning("");
+      await completeTrackedOrder(
+        detail.order,
         needsResult ? completeContent.trim() : "",
         needsResult ? completeFiles : [],
       );
 
-      setDeliveryWarning(result.telegram_delivery?.result?.delivered === false
-        ? "Order sudah selesai, tetapi pengiriman hasil ke Telegram belum terkonfirmasi. Periksa grup sebelum mengirim ulang." : "");
       setIsCompleteDialogOpen(false);
       await loadDetail();
     } catch (error) {
@@ -420,11 +420,11 @@ export default function OrderDetailPage() {
   const { order } = detail;
 
   const canReassign =
-    order.status === "IN_PROGRESS" &&
+    !isCompleting && order.status === "IN_PROGRESS" &&
     order.performance_owner_id === user?.id;
 
   const canSendResult =
-    (order.status === "IN_PROGRESS" || order.status === "ESCALATED") &&
+    !isCompleting && (order.status === "IN_PROGRESS" || order.status === "ESCALATED") &&
     order.performance_owner_id === user?.id;
 
   return (
@@ -475,6 +475,14 @@ export default function OrderDetailPage() {
           </Button>
         </div>
 
+        {completionNotice?.order.id === order.id && (
+          <p role={completionNotice.warning ? "alert" : "status"}
+            className={completionNotice.warning
+              ? "rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300"
+              : "rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-400"}>
+            {completionNotice.message}
+          </p>
+        )}
         {deliveryWarning && (
           <p role="alert" className="rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">
             {deliveryWarning}
@@ -496,7 +504,7 @@ export default function OrderDetailPage() {
             <div>
               <div className="text-sm text-muted-foreground">Status</div>
               <div className="mt-1">
-                <OrderStatusBadge status={order.status} />
+                <span>{isCompleting ? "Menunggu penyelesaian…" : <OrderStatusBadge status={order.status} />}</span>
               </div>
             </div>
 
@@ -998,6 +1006,11 @@ export default function OrderDetailPage() {
 
               {completeError && (
                 <p className="text-sm text-destructive">{completeError}</p>
+              )}
+              {isCompleting && (
+                <p role="status" className="text-sm text-muted-foreground">
+                  Menunggu hasil penyelesaian. Order tetap ditampilkan sampai pengiriman selesai atau terjadi timeout.
+                </p>
               )}
 
               <DialogFooter>
