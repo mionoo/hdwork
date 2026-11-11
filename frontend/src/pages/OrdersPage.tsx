@@ -46,6 +46,7 @@ import {
   latestIncomingReplyId,
   markTelegramConversationRead,
   sendResult,
+  orderDeliveryNotice,
   type Order,
   type OrderDetail,
   type OrderRawMessage,
@@ -273,9 +274,9 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
       setQuickResultError("")
       const result = await sendResult(token, quickResultOrder.id, quickResultContent.trim(), quickResultFiles)
       setQuickResultOrder(null)
-      setDeliveryWarning(result.telegram_delivery?.delivered === false
-        ? `Hasil order #${quickResultOrder.id} tersimpan, tetapi pengiriman ke Telegram belum terkonfirmasi. Periksa grup sebelum mengirim ulang.` : "")
-      setSuccessMessage(result.telegram_delivery?.delivered === false ? "" : result.message || `Result order #${quickResultOrder.id} berhasil dikirim`)
+      const notice = orderDeliveryNotice(`Hasil order #${quickResultOrder.id} tersimpan`, result.telegram_delivery)
+      setDeliveryWarning(notice.warning ? notice.message : "")
+      setSuccessMessage(notice.warning ? "" : notice.message)
       await loadOrders()
     } catch (error) {
       setQuickResultError(error instanceof Error ? error.message : "Gagal mengirim result")
@@ -500,7 +501,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
                       <td className="p-3">
                         {pendingInScope.has(order.id)
                           ? <span role="status" className="text-sm font-medium text-primary whitespace-nowrap">
-                              {pendingInScope.get(order.id)?.awaitingTelegram ? "Mengirim hasil…" : "Menyelesaikan…"}
+                              Menyimpan…
                             </span>
                           : <OrderStatusBadge status={order.status} />}
                       </td>
@@ -682,7 +683,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
             {quickResultError && <p className="text-sm text-destructive">{quickResultError}</p>}
             <DialogFooter>
               <Button type="button" variant="outline" disabled={quickActionLoading} onClick={() => setQuickResultOrder(null)}>Batal</Button>
-              <Button type="submit" disabled={quickActionLoading || (!quickResultContent.trim() && quickResultFiles.length === 0)}>{quickActionLoading ? "Mengirim..." : "Kirim Hasil"}</Button>
+              <Button type="submit" disabled={quickActionLoading || (!quickResultContent.trim() && quickResultFiles.length === 0)}>{quickActionLoading ? "Menyimpan…" : "Kirim Hasil"}</Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -703,7 +704,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
             <DialogDescription>
               {quickCompleteDetail?.results.length === 0
                 ? "Tambahkan hasil pekerjaan sebelum menyelesaikan order."
-                : "Tandai order ini selesai. Hasil yang sudah dikirim tidak akan dikirim ulang."}
+                : "Tandai order ini selesai. Hasil yang sudah tersimpan tetap mengikuti status pengirimannya."}
             </DialogDescription>
           </DialogHeader>
           <form
@@ -739,14 +740,9 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
               </>
             )}
             {quickCompleteError && <p className="text-sm text-destructive">{quickCompleteError}</p>}
-            {quickCompleteOrder && pendingInScope.has(quickCompleteOrder.id) && (
-              <p role="status" className="text-sm text-muted-foreground">
-                Menunggu hasil penyelesaian. Order tetap ditampilkan sampai pengiriman selesai atau terjadi timeout.
-              </p>
-            )}
             <DialogFooter>
               <Button type="button" variant="outline" disabled={quickActionLoading} onClick={() => { setQuickCompleteOrder(null); setQuickCompleteDetail(null) }}>Batal</Button>
-              <Button type="submit" disabled={quickActionLoading}>{quickActionLoading ? "Memproses..." : "Ya, Selesaikan"}</Button>
+              <Button type="submit" disabled={quickActionLoading}>{quickActionLoading ? "Menyimpan…" : "Selesaikan order"}</Button>
             </DialogFooter>
           </form>
         </DialogContent>

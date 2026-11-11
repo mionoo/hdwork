@@ -150,6 +150,23 @@ export type OrderResultFile = {
   created_at: string
 }
 
+export type TelegramDeliveryStatus = "pending" | "sending" | "sent" | "failed" | "unknown"
+
+type TelegramDelivery = {
+  delivered?: boolean
+  pending?: boolean
+  delivery_status?: TelegramDeliveryStatus
+}
+
+export function orderDeliveryNotice(saved: string, delivery?: TelegramDelivery | null) {
+  if (delivery?.delivered === true) return { warning: false, message: `${saved}. Hasil terkirim ke Telegram.` }
+  if (delivery?.pending || delivery?.delivery_status === "pending" || delivery?.delivery_status === "sending") {
+    return { warning: false, message: `${saved}. Pengiriman Telegram masuk antrean.` }
+  }
+  if (delivery) return { warning: true, message: `${saved}. Pengiriman Telegram belum terkonfirmasi. Periksa grup sebelum mengirim ulang.` }
+  return { warning: false, message: `${saved}.` }
+}
+
 export type OrderResult = {
   id: number
   user_id: number
@@ -157,6 +174,7 @@ export type OrderResult = {
   content: string | null
   telegram_chat_id: number | null
   telegram_message_id: number | null
+  telegram_delivery_status?: TelegramDeliveryStatus | null
   created_at: string
   files: OrderResultFile[]
 }

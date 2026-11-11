@@ -1,8 +1,8 @@
 import { createContext, useContext, useRef, useState, type ReactNode } from "react"
 import { useAuth } from "@/contexts/AuthContext"
-import { completeOrder, type Order } from "@/services/order.service"
+import { completeOrder, orderDeliveryNotice, type Order } from "@/services/order.service"
 
-type PendingCompletion = { order: Order; awaitingTelegram: boolean }
+type PendingCompletion = { order: Order }
 type CompletionNotice = { order: Order; warning: boolean; message: string }
 type CompletionContext = {
   pending: PendingCompletion[]
@@ -25,15 +25,15 @@ function CompletionState({ token, children }: { token: string | null; children: 
   async function complete(order: Order, content: string, files: File[]) {
     if (!token) throw new Error("Sesi login tidak tersedia.")
     if (active.current.has(order.id)) throw new Error("Penyelesaian order ini masih diproses.")
-    active.current.set(order.id, { order, awaitingTelegram: Boolean(content.trim() || files.length) })
+    active.current.set(order.id, { order })
     setPending([...active.current.values()])
     setNotice(null)
     try {
       const result = await completeOrder(token, order.id, content, files)
-      const warning = result.telegram_delivery?.result?.delivered === false
-      setNotice({ order, warning, message: warning
-        ? `Order #${order.id} sudah selesai, tetapi pengiriman hasil ke Telegram belum terkonfirmasi. Periksa grup sebelum mengirim ulang.`
-        : result.message || `Order #${order.id} berhasil diselesaikan` })
+      setNotice({
+        order,
+        ...orderDeliveryNotice(`Order #${order.id} selesai`, result.telegram_delivery?.result),
+      })
       return result
     } catch (failure) {
       setNotice({ order, warning: true, message: failure instanceof TypeError

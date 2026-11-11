@@ -28,9 +28,19 @@ import {
   getReassignTargets,
   reassignOrder,
   sendResult,
+  orderDeliveryNotice,
+  type TelegramDeliveryStatus,
   type OrderDetail,
   type ReassignTarget,
 } from "@/services/order.service";
+
+const deliveryLabels: Record<TelegramDeliveryStatus, string> = {
+  pending: "Telegram · Dalam antrean",
+  sending: "Telegram · Sedang dikirim",
+  sent: "Telegram · Terkirim",
+  failed: "Telegram · Pengiriman gagal",
+  unknown: "Telegram · Pengiriman belum terkonfirmasi",
+};
 
 function formatDateTime(value: string | null | undefined) {
   if (!value) return "-";
@@ -54,7 +64,7 @@ export default function OrderDetailPage() {
   const [loading, setLoading] = useState(true);
 
   const [error, setError] = useState("");
-  const [deliveryWarning, setDeliveryWarning] = useState("");
+  const [resultNotice, setResultNotice] = useState<ReturnType<typeof orderDeliveryNotice> | null>(null);
 
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -316,8 +326,7 @@ export default function OrderDetailPage() {
       setResultError("");
 
       const result = await sendResult(token, Number(id), resultContent.trim(), resultFiles);
-      setDeliveryWarning(result.telegram_delivery?.delivered === false
-        ? "Hasil tersimpan, tetapi pengiriman ke Telegram belum terkonfirmasi. Periksa grup sebelum mengirim ulang." : "");
+      setResultNotice(orderDeliveryNotice(`Hasil order #${id} tersimpan`, result.telegram_delivery));
 
       setIsResultDialogOpen(false);
       await loadDetail();
@@ -381,7 +390,7 @@ export default function OrderDetailPage() {
       setActionLoading(true);
       setCompleteError("");
 
-      setDeliveryWarning("");
+      setResultNotice(null);
       await completeTrackedOrder(
         detail.order,
         needsResult ? completeContent.trim() : "",
@@ -483,9 +492,12 @@ export default function OrderDetailPage() {
             {completionNotice.message}
           </p>
         )}
-        {deliveryWarning && (
-          <p role="alert" className="rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">
-            {deliveryWarning}
+        {resultNotice && (
+          <p role={resultNotice.warning ? "alert" : "status"}
+            className={resultNotice.warning
+              ? "rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300"
+              : "rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300"}>
+            {resultNotice.message}
           </p>
         )}
 
@@ -504,7 +516,7 @@ export default function OrderDetailPage() {
             <div>
               <div className="text-sm text-muted-foreground">Status</div>
               <div className="mt-1">
-                <span>{isCompleting ? "Menunggu penyelesaian…" : <OrderStatusBadge status={order.status} />}</span>
+                <span>{isCompleting ? "Menyimpan…" : <OrderStatusBadge status={order.status} />}</span>
               </div>
             </div>
 
@@ -599,8 +611,13 @@ export default function OrderDetailPage() {
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>Results</CardTitle>
+          <CardHeader className="flex flex-wrap items-center justify-between gap-2">
+            <CardTitle>Hasil pekerjaan</CardTitle>
+            {detail.results.some((result) => result.telegram_delivery_status === "pending" || result.telegram_delivery_status === "sending") && (
+              <Button variant="outline" size="sm" onClick={() => { setResultNotice(null); void loadDetail(); }}>
+                Perbarui status
+              </Button>
+            )}
           </CardHeader>
 
           <CardContent className="space-y-4">
@@ -613,6 +630,13 @@ export default function OrderDetailPage() {
                 <p className="mt-2 text-sm text-muted-foreground">
                   {formatDateTime(result.created_at)}
                 </p>
+
+                {result.telegram_delivery_status && (
+                  <p className={result.telegram_delivery_status === "failed" || result.telegram_delivery_status === "unknown"
+                    ? "mt-2 text-sm text-amber-800 dark:text-amber-300" : "mt-2 text-sm text-muted-foreground"}>
+                    {deliveryLabels[result.telegram_delivery_status]}
+                  </p>
+                )}
 
                 {result.files.map((file) => (
                   <div key={file.id} className="mt-3">
@@ -912,7 +936,7 @@ export default function OrderDetailPage() {
                       (!resultContent.trim() && resultFiles.length === 0)
                     }
                   >
-                    {actionLoading ? "Menyimpan..." : "Simpan Result"}
+                    {actionLoading ? "Menyimpan…" : "Kirim hasil"}
                   </Button>
                 </DialogFooter>
             </form>
@@ -1007,12 +1031,6 @@ export default function OrderDetailPage() {
               {completeError && (
                 <p className="text-sm text-destructive">{completeError}</p>
               )}
-              {isCompleting && (
-                <p role="status" className="text-sm text-muted-foreground">
-                  Menunggu hasil penyelesaian. Order tetap ditampilkan sampai pengiriman selesai atau terjadi timeout.
-                </p>
-              )}
-
               <DialogFooter>
                 <Button
                   type="button"
@@ -1033,7 +1051,7 @@ export default function OrderDetailPage() {
                   }
                 >
                   {actionLoading
-                    ? "Memproses..."
+                    ? "Menyimpan…"
                     : detail.results.length === 0
                       ? "Simpan Hasil & Selesaikan"
                       : "Ya, Selesaikan"}

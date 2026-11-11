@@ -330,29 +330,14 @@ async function sendResult(req, res) {
       telegram_message_id ?? null,
       files,
     );
-    const telegramDelivery = await telegramService.notifyOrderResult(
-      { ...result.telegram, order_id: id, result_id: result.result_id },
-      { alreadyQueued: result.telegram_queued },
-    );
-    if (telegramDelivery.message_id && !telegramDelivery.outbox_id) {
-      try {
-        await orderService.markResultTelegramDelivery(
-          result.result_id,
-          result.telegram.chat_id,
-          telegramDelivery.message_id,
-          result.telegram.thread_id,
-        );
-      } catch (error) {
-        console.error("Pencatatan pengiriman Telegram result gagal:", error.message);
-      }
-    }
+    const telegramDelivery = await sendSavedResult(result, {
+      ...result.telegram, order_id: id, result_id: result.result_id,
+    });
     realtimeService.emitOrdersChanged();
 
     return res.status(201).json({
       success: true,
-      message: telegramDelivery.delivered
-        ? "Result berhasil dikirim ke sistem dan Telegram"
-        : "Result tersimpan di sistem; pengiriman Telegram perlu diperiksa",
+      message: resultDeliveryMessage("Hasil order tersimpan", telegramDelivery),
       data: { ...result, telegram_delivery: telegramDelivery },
     });
   } catch (error) {
@@ -363,6 +348,31 @@ async function sendResult(req, res) {
       message: error.message || "Gagal mengirim result",
     });
   }
+}
+
+async function sendSavedResult(result, notification) {
+  if (result.telegram_queued) {
+    return { delivered: false, pending: true, delivery_status: "pending" };
+  }
+
+  const delivery = await telegramService.notifyOrderResult(notification);
+  if (delivery.message_id && !delivery.outbox_id) {
+    try {
+      await orderService.markResultTelegramDelivery(
+        notification.result_id, notification.chat_id, delivery.message_id, notification.thread_id,
+      );
+    } catch (error) {
+      console.error("Pencatatan pengiriman Telegram result gagal:", error.message);
+    }
+  }
+  return delivery;
+}
+
+function resultDeliveryMessage(saved, delivery) {
+  if (!delivery) return saved;
+  if (delivery.delivered === true) return `${saved}. Hasil terkirim ke Telegram.`;
+  if (delivery.pending) return `${saved}. Pengiriman Telegram masuk antrean.`;
+  return `${saved}. Pengiriman Telegram perlu diperiksa.`;
 }
 
 async function completeOrder(req, res) {
@@ -385,35 +395,20 @@ async function completeOrder(req, res) {
     });
     let resultDelivery = null;
     if (result.telegram.result) {
-      resultDelivery = await telegramService.notifyOrderResult({
+      resultDelivery = await sendSavedResult(result, {
         ...result.telegram,
         ...result.telegram.result,
         order_id: id,
         content: formatCompletionResult(result.telegram.result.content, result.telegram.user_name),
-      }, { alreadyQueued: result.telegram_queued });
-      if (resultDelivery.message_id && !resultDelivery.outbox_id) {
-        try {
-          await orderService.markResultTelegramDelivery(
-            result.telegram.result.result_id,
-            result.telegram.chat_id,
-            resultDelivery.message_id,
-            result.telegram.thread_id,
-          );
-        } catch (error) {
-          console.error("Pencatatan pengiriman Telegram result gagal:", error.message);
-        }
-      }
+      });
     }
     // Results already sent earlier are not repeated when completing an order.
     const completionDelivery = { delivered: false, skipped: true, error: null };
-    const allTelegramDelivered = !resultDelivery || resultDelivery.delivered;
     realtimeService.emitOrdersChanged();
 
     return res.status(200).json({
       success: true,
-      message: allTelegramDelivered
-        ? (resultDelivery ? "Order berhasil diselesaikan dan hasil dikirim ke Telegram" : "Order berhasil diselesaikan")
-        : "Order sudah diselesaikan; pengiriman Telegram perlu diperiksa",
+      message: resultDeliveryMessage("Order berhasil diselesaikan", resultDelivery),
       data: { ...result, telegram_delivery: { result: resultDelivery, completion: completionDelivery } },
     });
   } catch (error) {

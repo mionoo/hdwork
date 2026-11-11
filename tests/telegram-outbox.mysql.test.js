@@ -53,7 +53,7 @@ test('outbox migration, retry after restart, duplicate fencing and ambiguous del
     await repo.enqueueWithOrder(transaction, 'result:2', 'result', payload, 30);
     await transaction.commit();
   } finally { transaction.release(); }
-  const first = await outbox.deliver('result:2', 'result', payload, { alreadyQueued: true });
+  const first = await outbox.deliver('result:2', 'result', payload);
   assert.equal(first.delivery_status, 'pending');
   assert.equal(attempts, 1);
   assert.equal(await repo.claim(botId), null, 'backoff holds the job');

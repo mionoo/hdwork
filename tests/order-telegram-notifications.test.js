@@ -196,3 +196,30 @@ test("only an unambiguous failure before sending can retry the entire result", a
   assert.equal(partial.partially_delivered, true);
   assert.equal(partial.retry_safe, false);
 });
+
+test("saving and completing with a persisted outbox job returns queued without calling Telegram", async () => {
+  for (const complete of [false, true]) {
+    let attempts = 0;
+    const saved = { result_id: 3, content: "done" };
+    const controller = load("../src/controllers/order.controller.js", {
+      "../services/order.service": {
+        sendResult: async () => ({ ...saved, telegram_queued: true, telegram: notification }),
+        completeOrder: async () => ({ telegram_queued: true, telegram: { ...notification, result: saved } }),
+      },
+      "../services/telegram.service": {
+        notifyOrderResult: async () => { attempts++; throw new Error("Telegram unavailable"); },
+      },
+      "../services/realtime.service": { emitOrdersChanged() {} },
+    });
+    let response;
+    const res = { status(code) { assert.equal(code, complete ? 200 : 201); return this; }, json(body) { response = body; } };
+    await (complete ? controller.completeOrder : controller.sendResult)(
+      { params: { id: 1 }, user: { id: 2 }, body: { content: "done" }, files: [] }, res,
+    );
+    const delivery = complete ? response.data.telegram_delivery.result : response.data.telegram_delivery;
+    assert.equal(attempts, 0);
+    assert.equal(delivery.delivered, false);
+    assert.equal(delivery.delivery_status, "pending");
+    assert.match(response.message, /masuk antrean/);
+  }
+});

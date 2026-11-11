@@ -38,8 +38,8 @@ function createOutbox({ repo = repository, send, botId, log = console, delay = p
       return { delivered: false, outbox_id: job.id, delivery_status: 'unknown', error: safeError(error) };
     } finally { clearInterval(heartbeat); }
   }
-  async function deliver(key, kind, payload, { alreadyQueued = false } = {}) {
-    const stored = alreadyQueued ? await repo.find(botId, key) : await repo.enqueue(botId, key, kind, payload);
+  async function deliver(key, kind, payload) {
+    const stored = await repo.enqueue(botId, key, kind, payload);
     if (!stored) throw new Error('Entri pengiriman Telegram tidak ditemukan.');
     if (stored.status !== 'pending') {
       const delivery = typeof stored.delivery === 'string' ? JSON.parse(stored.delivery) : stored.delivery;

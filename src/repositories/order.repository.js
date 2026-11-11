@@ -3,10 +3,10 @@
 const pool = require("../config/database");
 const { formatCompletionResult } = require("../config/telegram");
 
-async function queueOrderNotification(connection, key, kind, payload, delaySeconds) {
+async function queueOrderNotification(connection, key, kind, payload) {
   if (process.env.TELEGRAM_OUTBOX_ENABLED !== "true") return false;
   const outbox = require("./telegram-outbox.repository");
-  await outbox.enqueueWithOrder(connection, key, kind, payload, delaySeconds);
+  await outbox.enqueueWithOrder(connection, key, kind, payload);
   return true;
 }
 
@@ -1042,7 +1042,7 @@ async function sendResult(
     if (result.telegram.chat_id) {
       result.telegram_queued = await queueOrderNotification(connection, `result:${result.result_id}`, "result", {
         ...result.telegram, order_id: result.order_id, result_id: result.result_id,
-      }, 30);
+      });
     }
     await connection.commit();
     return result;
@@ -1314,7 +1314,7 @@ async function completeOrder(orderId, userId, completionResult = {}) {
       result.telegram_queued = await queueOrderNotification(connection, `result:${savedResult.result_id}`, "result", {
         ...target, ...savedResult, order_id: result.order_id,
         content: formatCompletionResult(savedResult.content, target.user_name),
-      }, 30);
+      });
     }
     await connection.commit();
     return result;
@@ -1468,6 +1468,9 @@ async function getOrderDetail(orderId) {
       [orderId],
     );
 
+    const outboxBotId = process.env.TELEGRAM_OUTBOX_ENABLED === "true"
+      ? process.env.TELEGRAM_BOT_TOKEN?.match(/^(\d+):/)?.[1]
+      : undefined;
     const [results] = await connection.query(
       `
       SELECT
@@ -1477,14 +1480,17 @@ async function getOrderDetail(orderId) {
         r.content,
         r.telegram_chat_id,
         r.telegram_message_id,
-        r.created_at
+        r.created_at,
+        ${outboxBotId ? "outbox.status" : "NULL"} AS telegram_delivery_status
       FROM order_results r
       LEFT JOIN users u
         ON u.id = r.user_id
+      ${outboxBotId ? `LEFT JOIN telegram_outbox outbox
+        ON outbox.bot_id = ? AND outbox.job_key = CONCAT('result:', r.id)` : ""}
       WHERE r.order_id = ?
       ORDER BY r.created_at ASC
       `,
-      [orderId],
+      outboxBotId ? [outboxBotId, orderId] : [orderId],
     );
 
     for (const result of results) {

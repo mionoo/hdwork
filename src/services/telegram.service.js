@@ -894,7 +894,7 @@ async function sendResultFiles(notification, options, caption) {
   return { deliveries, errors, failures };
 }
 
-async function notifyOrderResult(notification, options) {
+async function notifyOrderResult(notification) {
   if (!bot || !notification?.chat_id) {
     return { delivered: false, message_id: null, error: "Bot atau tujuan Telegram tidak tersedia" };
   }
@@ -902,7 +902,7 @@ async function notifyOrderResult(notification, options) {
     const outbox = getOutbox();
     if (outbox) {
       if (!notification.result_id) throw new Error("ID hasil diperlukan untuk antrean Telegram.");
-      return await outbox.deliver(`result:${notification.result_id}`, "result", notification, options);
+      return await outbox.deliver(`result:${notification.result_id}`, "result", notification);
     }
     return await queueOutgoingMessage(notification.chat_id, notification.thread_id, () => deliverOrderResult(notification));
   } catch (error) {
