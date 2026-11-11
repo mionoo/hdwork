@@ -3,8 +3,16 @@ const { setTimeout: pause } = require('node:timers/promises');
 const safeError = error => String(error?.message || error || 'Pengiriman belum terkonfirmasi')
   .replace(/bot\d+:[A-Za-z0-9_-]+/g, 'bot[REDACTED]').slice(0, 2000);
 
-function createOutbox({ repo = repository, send, botId, log = console, delay = pause }) {
+const MAX_ATTEMPTS = 10;
+const MAX_RETRY_DELAY_SECONDS = 16;
+
+function createOutbox({ repo = repository, send, botId, onSettled, log = console, delay = pause }) {
   let controller, worker, startup;
+  async function finish(job) {
+    if (!onSettled) return;
+    try { await onSettled(job); }
+    catch (error) { log.warn('Pembersihan pengiriman Telegram gagal', { job_key: job.job_key, error: safeError(error) }); }
+  }
   async function attempt(job) {
     let leaseLost = false;
     const heartbeat = setInterval(() => {
@@ -23,11 +31,12 @@ function createOutbox({ repo = repository, send, botId, log = console, delay = p
       if (leaseLost) throw new Error('Lease pengiriman Telegram belum terkonfirmasi.');
       // Only explicit pre-TLS failures / 429 can retry. Resets after sending and
       // partial albums are uncertain and must never be blindly sent again.
-      const retry = !delivery.delivered && delivery.retry_safe === true && Number(job.attempts) < 5;
+      const retry = !delivery.delivered && delivery.retry_safe === true && Number(job.attempts) < MAX_ATTEMPTS;
       const status = delivery.delivered ? 'sent' : retry ? 'pending'
         : delivery.retry_safe || delivery.rejected ? 'failed' : 'unknown';
-      const seconds = Math.max(Number(delivery.retry_after) || 0, 2 ** Number(job.attempts));
+      const seconds = Math.max(Number(delivery.retry_after) || 0, Math.min(MAX_RETRY_DELAY_SECONDS, 2 ** Number(job.attempts)));
       await repo.settle(job, status, delivery, retry ? seconds : 0);
+      if (!retry) await finish(job);
       if (status !== 'sent') log.warn('Pengiriman Telegram belum selesai', {
         outbox_id: job.id, job_key: job.job_key, status, attempts: job.attempts,
         ...(retry ? { retry_seconds: seconds } : {}),
@@ -38,6 +47,10 @@ function createOutbox({ repo = repository, send, botId, log = console, delay = p
       return { delivered: false, outbox_id: job.id, delivery_status: 'unknown', error: safeError(error) };
     } finally { clearInterval(heartbeat); }
   }
+  async function enqueue(key, kind, payload) {
+    await repo.queue(botId, key, kind, payload);
+  }
+
   async function deliver(key, kind, payload) {
     const stored = await repo.enqueue(botId, key, kind, payload);
     if (!stored) throw new Error('Entri pengiriman Telegram tidak ditemukan.');
@@ -59,7 +72,7 @@ function createOutbox({ repo = repository, send, botId, log = console, delay = p
       worker = (async () => {
         while (!signal.aborted) {
           try {
-            const job = await repo.claim(botId);
+            const job = await repo.claim(botId, undefined, finish);
             if (job) await attempt(job);
             else await delay(1000, undefined, { signal });
           } catch (error) {
@@ -78,6 +91,6 @@ function createOutbox({ repo = repository, send, botId, log = console, delay = p
     controller = startup = worker = undefined;
   }
 
-  return { deliver, start, stop };
+  return { enqueue, find: (key) => repo.find(botId, key), deliver, start, stop };
 }
 module.exports = { createOutbox };

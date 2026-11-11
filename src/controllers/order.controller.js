@@ -28,6 +28,7 @@ async function markConversationRead(req, res) {
 }
 
 async function replyToConversation(req, res) {
+  let queued = false;
   try {
     const { id, messageId } = req.params;
     if (!/^\d+$/.test(id) || !/^\d+$/.test(messageId)) {
@@ -54,14 +55,30 @@ async function replyToConversation(req, res) {
     const result = await telegramService.sendConversationReply({
       orderId: order.id, replyId: messageId, userId: req.user.id, target, content, attachment,
     });
-    return res.status(201).json({ success: true, data: result });
+    queued = result.pending === true;
+    return res.status(queued ? 202 : 201).json({ success: true, data: result });
   } catch (error) {
     if (!error.statusCode) console.error("Balasan order Telegram gagal:", error.message);
     return res.status(error.statusCode || 500).json({ success: false, message: error.statusCode ? error.message : "Balasan gagal diproses." });
   } finally {
-    if (req.file?.path) await unlink(req.file.path).catch((error) => {
+    if (!queued && req.file?.path) await unlink(req.file.path).catch((error) => {
       console.error("File sementara balasan gagal dihapus:", error.code);
     });
+  }
+}
+
+async function getConversationReplyDelivery(req, res) {
+  try {
+    const { id, deliveryId } = req.params;
+    if (!/^\d+$/.test(id) || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(deliveryId)) {
+      return res.status(400).json({ success: false, message: "ID pengiriman tidak valid." });
+    }
+    await orderService.getOrderById(id, req.user);
+    const result = await telegramService.getConversationReplyDelivery(id, req.user.id, deliveryId);
+    if (!result) return res.status(404).json({ success: false, message: "Pengiriman tidak ditemukan." });
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ success: false, message: "Status pengiriman tidak dapat dimuat." });
   }
 }
 
@@ -457,6 +474,7 @@ module.exports = {
   getSourcePhoto,
   getConversationMedia,
   replyToConversation,
+  getConversationReplyDelivery,
   markConversationRead,
   getAllOrders,
   getOrderById,

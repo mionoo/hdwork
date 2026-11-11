@@ -23,6 +23,9 @@ test('outbox migration, retry after restart, duplicate fencing and ambiguous del
   const migration = fs.readFileSync(require.resolve('../database/migrations/20261111_telegram_outbox.sql'), 'utf8');
   await pool.query(migration);
   await pool.query(migration);
+  const replyMigration = fs.readFileSync(require.resolve('../database/migrations/20261112_telegram_outbox_replies.sql'), 'utf8');
+  await pool.query(replyMigration);
+  await pool.query(replyMigration);
   await pool.query(`CREATE TABLE telegram_groups (id BIGINT PRIMARY KEY, is_active BOOL, archived_at DATETIME,
     telegram_chat_id BIGINT, telegram_thread_id BIGINT)`);
   await pool.query(`CREATE TABLE orders (id BIGINT PRIMARY KEY, telegram_group_id BIGINT,
@@ -96,4 +99,13 @@ test('outbox migration, retry after restart, duplicate fencing and ambiguous del
   const oldClaim = await outbox.deliver('claim:42', 'claim', { order_id: 42, user_id: 18, telegram_chat_id: -100, telegram_thread_id: 7 });
   assert.equal(oldClaim.delivery_status, 'failed');
   assert.equal(attempts, 2, 'old claim does not notify after completion');
+  await repo.queue(botId, 'reply:test', 'reply', {
+    orderId: 42, replyId: 9, userId: 18, target: { chat_id: -100, thread_id: 7, message_id: 3 },
+  });
+  const reply = await repo.find(botId, 'reply:test');
+  const replyJob = await repo.claim(botId);
+  assert.equal(replyJob.id, reply.id);
+  assert.equal(replyJob.kind, 'reply');
+  await repo.settle(replyJob, 'sent', { delivered: true, message_id: 99 });
+
 });

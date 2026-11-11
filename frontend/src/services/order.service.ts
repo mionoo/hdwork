@@ -218,7 +218,16 @@ export async function sendTelegramOrderReply(token: string, orderId: number, mes
   if (!response.ok || !result?.success) {
     throw new Error(result?.message || "Pengiriman belum dapat dikonfirmasi. Periksa grup Telegram sebelum mengirim ulang.")
   }
-  return result.data as { replies?: TelegramOrderReply[]; warning?: string }
+  return result.data as { replies?: TelegramOrderReply[]; warning?: string; delivery_id?: string }
+}
+
+export async function getTelegramReplyDelivery(token: string, orderId: number, deliveryId: string, signal: AbortSignal) {
+  const response = await fetch(`${API_URL}/orders/${orderId}/conversation-deliveries/${deliveryId}`, {
+    headers: { Authorization: `Bearer ${token}` }, signal,
+  })
+  const result = await response.json().catch(() => null)
+  if (!response.ok || !result?.success) throw new Error(result?.message || "Status balasan tidak dapat dimuat.")
+  return result.data as { delivery_status: TelegramDeliveryStatus; replies?: TelegramOrderReply[]; warning?: string }
 }
 
 export type OrderDetail = {

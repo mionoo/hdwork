@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { API_URL } from "@/config/api"
-import { sendTelegramOrderReply, type TelegramOrderReply } from "@/services/order.service"
+import { getTelegramReplyDelivery, sendTelegramOrderReply, type TelegramOrderReply } from "@/services/order.service"
 
 const dateTime = new Intl.DateTimeFormat("id-ID", { dateStyle: "medium", timeStyle: "short" })
 
@@ -30,6 +30,45 @@ export default function OrderTelegramConversation({ orderId, replies = [], token
   const [targetId, setTargetId] = useState<number | null>(null)
   const [sending, setSending] = useState(false)
   const [notice, setNotice] = useState("")
+  const [deliveryId, setDeliveryId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!deliveryId || !token) return
+    const authToken = token
+    const jobId = deliveryId
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout>
+
+    async function checkDelivery() {
+      try {
+        const result = await getTelegramReplyDelivery(authToken, orderId, jobId, controller.signal)
+        if (controller.signal.aborted) return
+        switch (result.delivery_status) {
+          case "pending":
+          case "sending":
+            timer = setTimeout(checkDelivery, 3000)
+            return
+          case "sent":
+            if (result.replies) setUpdatedReplies(result.replies)
+            setNotice(result.warning || "Balasan terkirim ke Telegram.")
+            break
+          case "failed":
+            setNotice("Balasan gagal dikirim. Periksa pesan tujuan dan koneksi Telegram.")
+            break
+          case "unknown":
+            setNotice("Pengiriman balasan belum terkonfirmasi. Periksa grup sebelum mengirim ulang.")
+            break
+        }
+        setDeliveryId(null)
+      } catch {
+        if (controller.signal.aborted) return
+        setNotice("Status balasan tidak dapat dimuat. Periksa grup sebelum mengirim ulang.")
+        setDeliveryId(null)
+      }
+    }
+
+    timer = setTimeout(checkDelivery, 1000)
+    return () => { controller.abort(); clearTimeout(timer) }
+  }, [deliveryId, token, orderId])
   useEffect(() => { setUpdatedReplies(null) }, [replies])
   const entries = new Map<string, TelegramOrderReply[]>()
   for (const reply of updatedReplies ?? replies) {
@@ -77,7 +116,10 @@ export default function OrderTelegramConversation({ orderId, replies = [], token
                             try {
                               const result = await sendTelegramOrderReply(token, orderId, message.id, content, file)
                               if (result.replies) setUpdatedReplies(result.replies)
-                              setNotice(result.warning || "Balasan terkirim ke Telegram.")
+                              setDeliveryId(result.delivery_id ?? null)
+                              setNotice(result.delivery_id
+                                ? "Balasan masuk antrean Telegram."
+                                : result.warning || "Balasan terkirim ke Telegram.")
                               setTargetId(null)
                             } finally {
                               setSending(false)

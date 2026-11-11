@@ -1,3 +1,6 @@
+const { randomUUID } = require("node:crypto");
+const { unlink } = require("node:fs/promises");
+const path = require("node:path");
 const { CACTI_ENABLED = false } = require("../config/features");
 const { Markup, Telegraf } = require("telegraf");
 const { setTimeout: delay } = require("node:timers/promises");
@@ -36,8 +39,11 @@ function getOutbox() {
   if (!botId) throw new Error("Token bot tidak valid untuk antrean pengiriman.");
   resultOutbox ??= require("./telegram-outbox.service").createOutbox({
     botId,
-    send: (kind, payload) => kind === "claim" ? deliverOrderClaim(payload)
-      : queueOutgoingMessage(payload.chat_id, payload.thread_id, async () => {
+    onSettled: removeQueuedReplyAttachment,
+    send: (kind, payload) => {
+      if (kind === "claim") return deliverOrderClaim(payload);
+      if (kind === "reply") return deliverConversationReply(payload, true);
+      return queueOutgoingMessage(payload.chat_id, payload.thread_id, async () => {
         const delivery = await deliverOrderResult(payload);
         if (delivery.message_id && payload.result_id) {
           try {
@@ -48,7 +54,8 @@ function getOutbox() {
         }
         realtimeService.emitOrdersChanged();
         return delivery;
-      }),
+      });
+    },
   });
   return resultOutbox;
 }
@@ -464,13 +471,53 @@ function replyMedia(message) {
   return kind ? { kind, file: message[kind] } : null;
 }
 
-async function sendConversationReply({ orderId, replyId, userId, target, content, attachment }) {
+async function removeQueuedReplyAttachment(job) {
+  if (job.kind !== "reply") return;
+  const payload = typeof job.payload === "string" ? JSON.parse(job.payload) : job.payload;
+  const filename = payload.attachment?.path;
+  const uploadDirectory = path.resolve(__dirname, "../../storage/order-source/reply-upload");
+  if (!filename || path.dirname(path.resolve(filename)) !== uploadDirectory) return;
+  await unlink(filename).catch((error) => { if (error.code !== "ENOENT") throw error; });
+}
+
+async function sendConversationReply(payload) {
   if (!bot) throw Object.assign(new Error("Bot Telegram tidak tersedia"), { statusCode: 503 });
+  const outbox = getOutbox();
+  if (!outbox) return deliverConversationReply(payload);
+
+  const { attachment, ...reply } = payload;
+  const replyId = randomUUID();
+  await outbox.enqueue(`reply:${replyId}`, "reply", {
+    ...reply,
+    attachment: attachment ? {
+      path: attachment.path, originalname: attachment.originalname, mimetype: attachment.mimetype,
+    } : null,
+  });
+  return { pending: true, delivery_status: "pending", delivery_id: replyId };
+}
+
+async function getConversationReplyDelivery(orderId, userId, deliveryId) {
+  const job = await getOutbox()?.find(`reply:${deliveryId}`);
+  if (!job || job.kind !== "reply") return null;
+  const payload = typeof job.payload === "string" ? JSON.parse(job.payload) : job.payload;
+  if (String(payload.orderId) !== String(orderId) || String(payload.userId) !== String(userId)) return null;
+  const delivery = typeof job.delivery === "string" ? JSON.parse(job.delivery) : job.delivery;
+  return {
+    delivery_status: job.status,
+    attempts: job.attempts,
+    ...(job.status === "sent" ? { replies: await conversationRepository.list(orderId), warning: delivery?.warning } : {}),
+  };
+}
+
+async function deliverConversationReply({ orderId, replyId, userId, target, content, attachment }, queued = false) {
   const chatId = target.chat_id;
   const threadId = Number(target.thread_id);
   return queueOutgoingMessage(chatId, threadId, () => trackOutgoingReceipt(chatId, threadId, async () => {
-    const currentTarget = await conversationRepository.findReplyTarget(orderId, replyId, userId);
-    if (!currentTarget) {
+    const currentTarget = await conversationRepository.findReplyTarget(orderId, replyId, userId, { queued });
+    if (!currentTarget || String(currentTarget.chat_id) !== String(chatId)
+      || Number(currentTarget.thread_id) !== threadId
+      || String(currentTarget.message_id) !== String(target.message_id)) {
+      if (queued) return { delivered: false, rejected: true, error: "Pesan tujuan atau akses order sudah berubah." };
       throw Object.assign(new Error("Pesan tujuan atau akses order sudah berubah."), { statusCode: 409 });
     }
     const options = {
@@ -491,6 +538,7 @@ async function sendConversationReply({ orderId, replyId, userId, target, content
         message = await bot.telegram.sendMessage(chatId, content, options);
       }
     } catch (error) {
+      if (queued) return { delivered: false, ...deliveryFailure(error) };
       const rejected = error.response?.error_code >= 400 && error.response?.error_code < 500;
       const detail = rejected ? "Telegram menolak balasan. Periksa pesan tujuan atau format lampiran."
         : "Pengiriman belum dapat dikonfirmasi. Periksa grup Telegram sebelum mengirim ulang.";
@@ -505,10 +553,16 @@ async function sendConversationReply({ orderId, replyId, userId, target, content
         excerpt: (target.content || target.file_name || "Lampiran Telegram").slice(0, 300),
         media: replyMedia(message),
       });
+      if (queued) {
+        realtimeService.emitOrdersChanged();
+        return { delivered: true, message_id: message.message_id };
+      }
       return { replies: await conversationRepository.list(orderId) };
     } catch (error) {
       console.error("Balasan terkirim tetapi riwayat Telegram gagal dimuat:", telegramErrorMessage(error));
-      return { warning: "Balasan terkirim ke Telegram, tetapi riwayat belum dapat diperbarui." };
+      const warning = "Balasan terkirim ke Telegram, tetapi riwayat belum dapat diperbarui.";
+      if (queued) return { delivered: true, message_id: message.message_id, warning };
+      return { warning };
     }
   }));
 }
@@ -1154,6 +1208,7 @@ module.exports = {
   getSourcePhoto,
   getConversationMedia,
   sendConversationReply,
+  getConversationReplyDelivery,
   startPolling,
   stopPolling,
   getPollingStatus,

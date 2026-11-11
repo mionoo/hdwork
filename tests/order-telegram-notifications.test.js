@@ -223,3 +223,49 @@ test("saving and completing with a persisted outbox job returns queued without c
     assert.match(response.message, /masuk antrean/);
   }
 });
+
+test("queued conversation reply preserves its attachment and retries only before confirmed delivery", async () => {
+  const target = { chat_id: -100, thread_id: 7, message_id: 12, owner_name: "HD", content: "Pesan awal" };
+  let sender, queued, recorded = 0, sends = 0;
+  const service = load("../src/services/telegram.service.js", {
+    telegraf: { Telegraf: class {
+      telegram = { sendDocument: async (_chatId, file, options) => {
+        sends++;
+        assert.equal(file.source, "/private/reply.pdf");
+        assert.equal(options.reply_parameters.message_id, 12);
+        assert.equal(options.reply_parameters.allow_sending_without_reply, false);
+        if (sends === 1) throw Object.assign(new Error("Koneksi TLS Telegram melewati batas waktu."), { code: "ETIMEDOUT" });
+        return { message_id: 91 };
+      } };
+    } },
+    "./telegram-outbox.service": { createOutbox: (options) => {
+      sender = options.send;
+      return { enqueue: async (key, kind, payload) => { queued = { key, kind, payload }; } };
+    } },
+    "../repositories/order-conversation.repository": {
+      findReplyTarget: async () => target,
+      recordReply: async () => { recorded++; },
+    },
+    "../services/realtime.service": { emitOrdersChanged() {} },
+  }, { TELEGRAM_BOT_TOKEN: "123:test", TELEGRAM_OUTBOX_ENABLED: "true" });
+
+  let removed = false, response;
+  const controller = load("../src/controllers/order.controller.js", {
+    "node:fs/promises": { unlink: async () => { removed = true; } },
+    "../services/order.service": { getOrderById: async () => ({ id: 42, status: "IN_PROGRESS", performance_owner_id: 18 }) },
+    "../repositories/order-conversation.repository": { findReplyTarget: async () => target },
+    "../services/telegram.service": service,
+  });
+  await controller.replyToConversation({
+    params: { id: "42", messageId: "9" }, user: { id: 18, role: "HD" }, body: { content: "Balasan" },
+    file: { path: "/private/reply.pdf", mimetype: "application/pdf", originalname: "reply.pdf", size: 1 },
+  }, { status(code) { assert.equal(code, 202); return this; }, json(body) { response = body; } });
+  assert.equal(response.data.pending, true);
+  assert.equal(queued.key, `reply:${response.data.delivery_id}`);
+  assert.equal(removed, false);
+  assert.equal(sends, 0);
+  assert.equal((await sender(queued.kind, queued.payload)).retry_safe, true);
+  assert.equal(recorded, 0);
+  assert.equal((await sender(queued.kind, queued.payload)).delivered, true);
+  assert.equal(recorded, 1);
+});

@@ -20,6 +20,10 @@ function insertJob(query, botId, key, kind, payload, delaySeconds) {
   [botId, key, kind, JSON.stringify(payload), delaySeconds]);
 }
 
+function queue(botId, key, kind, payload) {
+  return insertJob(write, botId, key, kind, payload, 0);
+}
+
 async function enqueue(botId, key, kind, payload) {
   await insertJob(write, botId, key, kind, payload, 30);
   return find(botId, key);
@@ -37,19 +41,20 @@ async function enqueueWithOrder(connection, key, kind, payload, delaySeconds = 0
   await insertJob(connection.query.bind(connection), botId, key, kind, payload, delaySeconds);
 }
 
-async function expireInterruptedJobs(botId) {
-  const [jobs] = await pool.query(`SELECT id FROM telegram_outbox
+async function expireInterruptedJobs(botId, onExpired) {
+  const [jobs] = await pool.query(`SELECT id, job_key, kind, payload FROM telegram_outbox
     WHERE bot_id = ? AND status = 'sending' AND lease_until < NOW(3) LIMIT 20`, [botId]);
   for (const job of jobs) {
     // Telegram may already have accepted the message. Keep it for inspection.
-    await write(`UPDATE telegram_outbox SET status = 'unknown', lease_token = NULL, lease_until = NULL,
+    const [updated] = await write(`UPDATE telegram_outbox SET status = 'unknown', lease_token = NULL, lease_until = NULL,
       last_error = 'Proses pengiriman terputus; periksa grup sebelum mengirim ulang.'
       WHERE id = ? AND status = 'sending' AND lease_until < NOW(3)`, [job.id]);
+    if (updated.affectedRows === 1 && onExpired) await onExpired(job);
   }
 }
 
-async function claim(botId, id) {
-  if (!id) await expireInterruptedJobs(botId);
+async function claim(botId, id, onExpired) {
+  if (!id) await expireInterruptedJobs(botId, onExpired);
   const ready = id ? '(next_attempt_at <= NOW(3) OR attempts = 0)' : 'next_attempt_at <= NOW(3)';
   const [[job]] = await pool.query(`SELECT * FROM telegram_outbox
     WHERE bot_id = ? AND status = 'pending' AND ${ready} ${id ? 'AND id = ?' : ''}
@@ -78,6 +83,8 @@ async function settle(job, status, delivery, seconds = 0) {
   if (result.affectedRows !== 1) throw new Error('Lease pengiriman Telegram tidak lagi berlaku.');
 }
 async function isTargetCurrent(kind, payload) {
+  // The reply sender rechecks ownership and the exact target immediately before sending.
+  if (kind === 'reply') return true;
   const claim = kind === 'claim';
   const [[row]] = await pool.query(`SELECT o.id FROM orders o
     JOIN telegram_groups g ON g.id = o.telegram_group_id
@@ -90,4 +97,4 @@ async function isTargetCurrent(kind, payload) {
     : [payload.result_id, payload.order_id, payload.chat_id, payload.thread_id || 0]);
   return Boolean(row);
 }
-module.exports = { checkSchema, enqueue, find, enqueueWithOrder, claim, renew, settle, isTargetCurrent };
+module.exports = { checkSchema, enqueue, queue, find, enqueueWithOrder, claim, renew, settle, isTargetCurrent };

@@ -78,7 +78,7 @@ async function findMedia(orderId, messageId) {
   return rows[0] || null;
 }
 
-async function findReplyTarget(orderId, replyId, userId) {
+async function findReplyTarget(orderId, replyId, userId, { queued = false } = {}) {
   const [rows] = await pool.query(`
     SELECT m.chat_id, m.thread_id, m.message_id, m.content, m.file_name, u.name AS owner_name
     FROM order_telegram_messages m
@@ -86,7 +86,8 @@ async function findReplyTarget(orderId, replyId, userId) {
     JOIN telegram_groups tg ON tg.id = o.telegram_group_id
     JOIN users u ON u.id = o.performance_owner_id
     WHERE m.order_id = ? AND m.id = ? AND m.kind = 'reply'
-      AND o.performance_owner_id = ? AND o.status IN ('IN_PROGRESS', 'ESCALATED')
+      AND o.performance_owner_id = ? AND o.status IN ('IN_PROGRESS', 'ESCALATED'${queued ? `, 'DONE'` : ''})
+      AND u.is_active = 1 AND u.role = 'HD'
       AND tg.is_active = 1 AND tg.archived_at IS NULL
       AND tg.telegram_chat_id = m.chat_id AND tg.telegram_thread_id = m.thread_id
   `, [orderId, replyId, userId]);
