@@ -67,7 +67,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
   monitorEmptyMessage?: string
 }) {
   const { token, user } = useAuth()
-  const { pending, notice: completionNotice, complete: completeTrackedOrder, acknowledge, applyUpdates, revision } = useOrderCompletion()
+  const { pending, complete: completeTrackedOrder, acknowledge, applyUpdates, revision } = useOrderCompletion()
   const navigate = useNavigate()
 
   const [orders, setOrders] =
@@ -349,7 +349,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
     }
   }
 
-  async function handleQuickComplete(event: React.FormEvent<HTMLFormElement>) {
+  function handleQuickComplete(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!token || !quickCompleteOrder || !quickCompleteDetail) return
     const needsResult = quickCompleteDetail.results.length === 0
@@ -359,28 +359,23 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
     }
 
     try {
-      setQuickActionLoading(true)
       setQuickCompleteError("")
       setSuccessMessage("")
       setDeliveryWarning("")
-      await completeTrackedOrder(quickCompleteOrder, needsResult ? quickCompleteContent.trim() : "", needsResult ? quickCompleteFiles : [])
-      setOrders((current) => current.filter((item) => item.id !== quickCompleteOrder.id))
+      completeTrackedOrder(quickCompleteOrder, needsResult ? quickCompleteContent.trim() : "", needsResult ? quickCompleteFiles : [])
       setQuickCompleteOrder(null)
       setQuickCompleteDetail(null)
       setSelectedMessage(null)
       setSelectedOrder(null)
-      void loadOrders()
     } catch (error) {
       setQuickCompleteError(error instanceof Error ? error.message : "Gagal menyelesaikan order")
-    } finally {
-      setQuickActionLoading(false)
     }
   }
 
   const groupIds = new Set(scope?.split(",").map(Number) ?? [])
   const pendingInScope = new Map(pending.filter((entry) => groupIds.has(Number(entry.order.telegram_group_id)))
     .map((entry) => [entry.order.id, entry]))
-  const displayedOrders = orders.map((order) => pendingInScope.get(order.id)?.order ?? order)
+  const displayedOrders = applyUpdates(orders, -1).map((order) => pendingInScope.get(order.id)?.order ?? order)
   for (const entry of pendingInScope.values()) {
     if (!displayedOrders.some((order) => order.id === entry.order.id)) displayedOrders.unshift(entry.order)
   }
@@ -431,15 +426,6 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
         {deliveryWarning && (
           <p role="alert" className="rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">
             {deliveryWarning}
-          </p>
-        )}
-
-        {completionNotice && groupIds.has(Number(completionNotice.order.telegram_group_id)) && (
-          <p role={completionNotice.warning ? "alert" : "status"}
-            className={completionNotice.warning
-              ? "rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300"
-              : "rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-400"}>
-            {completionNotice.message}
           </p>
         )}
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 
@@ -53,7 +53,7 @@ function formatDateTime(value: string | null | undefined) {
 
 export default function OrderDetailPage() {
   const { token, user } = useAuth();
-  const { pending, notice: completionNotice, complete: completeTrackedOrder } = useOrderCompletion();
+  const { pending, complete: completeTrackedOrder } = useOrderCompletion();
   const { id } = useParams();
   const isCompleting = pending.some((entry) => entry.order.id === Number(id));
   const navigate = useNavigate();
@@ -133,6 +133,14 @@ export default function OrderDetailPage() {
   useEffect(() => {
     loadDetail();
   }, [token, id]);
+
+  const previousCompletion = useRef({ id, pending: isCompleting });
+  useEffect(() => {
+    if (previousCompletion.current.id === id && previousCompletion.current.pending && !isCompleting) {
+      void loadDetail(true);
+    }
+    previousCompletion.current = { id, pending: isCompleting };
+  }, [isCompleting, id]);
 
   useEffect(() => {
     if (!token || !detail) return;
@@ -375,7 +383,7 @@ export default function OrderDetailPage() {
     addCompleteFiles(files);
   }
 
-  async function handleComplete(event: React.FormEvent<HTMLFormElement>) {
+  function handleComplete(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!token || !id || !detail || isCompleting) return;
@@ -388,29 +396,22 @@ export default function OrderDetailPage() {
     }
 
     try {
-      setActionLoading(true);
       setCompleteError("");
 
       setResultNotice(null);
-      await completeTrackedOrder(
+      completeTrackedOrder(
         detail.order,
         needsResult ? completeContent.trim() : "",
         needsResult ? completeFiles : [],
       );
 
       setIsCompleteDialogOpen(false);
-      setDetail((current) => current ? {
-        ...current, order: { ...current.order, status: "DONE" },
-      } : current);
-      void loadDetail(true);
     } catch (error) {
       setCompleteError(
         error instanceof Error
           ? error.message
           : "Gagal menyelesaikan order",
       );
-    } finally {
-      setActionLoading(false);
     }
   }
 
@@ -488,14 +489,6 @@ export default function OrderDetailPage() {
           </Button>
         </div>
 
-        {completionNotice?.order.id === order.id && (
-          <p role={completionNotice.warning ? "alert" : "status"}
-            className={completionNotice.warning
-              ? "rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300"
-              : "rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-400"}>
-            {completionNotice.message}
-          </p>
-        )}
         {resultNotice && (
           <p role={resultNotice.warning ? "alert" : "status"}
             className={resultNotice.warning
