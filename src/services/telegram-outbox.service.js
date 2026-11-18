@@ -3,8 +3,14 @@ const { setTimeout: pause } = require('node:timers/promises');
 const safeError = error => String(error?.message || error || 'Pengiriman belum terkonfirmasi')
   .replace(/bot\d+:[A-Za-z0-9_-]+/g, 'bot[REDACTED]').slice(0, 2000);
 
-const MAX_ATTEMPTS = 10;
-const MAX_RETRY_DELAY_SECONDS = 16;
+const MAX_ATTEMPTS = 20;
+
+function retryDelaySeconds(failedAttempt) {
+  if (failedAttempt <= 3) return 2;
+  if (failedAttempt <= 5) return 4;
+  if (failedAttempt === 6) return 6;
+  return 8;
+}
 
 function createOutbox({ repo = repository, send, botId, onSettled, log = console, delay = pause }) {
   let controller, worker, startup;
@@ -34,7 +40,7 @@ function createOutbox({ repo = repository, send, botId, onSettled, log = console
       const retry = !delivery.delivered && delivery.retry_safe === true && Number(job.attempts) < MAX_ATTEMPTS;
       const status = delivery.delivered ? 'sent' : retry ? 'pending'
         : delivery.retry_safe || delivery.rejected ? 'failed' : 'unknown';
-      const seconds = Math.max(Number(delivery.retry_after) || 0, Math.min(MAX_RETRY_DELAY_SECONDS, 2 ** Number(job.attempts)));
+      const seconds = Math.max(Number(delivery.retry_after) || 0, retryDelaySeconds(Number(job.attempts)));
       await repo.settle(job, status, delivery, retry ? seconds : 0);
       if (!retry) await finish(job);
       if (status !== 'sent') log.warn('Pengiriman Telegram belum selesai', {
