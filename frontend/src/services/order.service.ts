@@ -52,14 +52,17 @@ type OrdersResponse = {
 export async function getOrders(
   token: string,
   filters: {
+    activeOnly?: boolean
     cityId?: string
     segmentId?: string
     groupId?: string
     groupIds?: number[]
   } = {},
+  signal?: AbortSignal,
 ): Promise<Order[]> {
   const query = new URLSearchParams()
 
+  if (filters.activeOnly) query.set("active_only", "1")
   if (filters.cityId) query.set("city_id", filters.cityId)
   if (filters.segmentId) query.set("segment_id", filters.segmentId)
   if (filters.groupId) query.set("telegram_group_id", filters.groupId)
@@ -70,6 +73,7 @@ export async function getOrders(
   const response = await fetch(
     `${API_URL}/orders${queryString ? `?${queryString}` : ""}`,
     {
+      signal,
       headers: {
         Authorization: `Bearer ${token}`,
       },

@@ -121,6 +121,7 @@ async function getAllOrders(req, res) {
   try {
     const {
       status,
+      active_only,
       city_id,
       segment_id,
       user_id,
@@ -132,6 +133,7 @@ async function getAllOrders(req, res) {
 
     const filters = {
       status,
+      active_only,
       city_id,
       segment_id,
       user_id,

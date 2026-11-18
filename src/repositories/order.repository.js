@@ -11,7 +11,7 @@ async function queueOrderNotification(connection, key, kind, payload) {
 }
 
 async function getAllOrders(filters = {}) {
-  const { status, city_id, segment_id, user_id, allowed_segment_ids, telegram_group_id, telegram_group_ids } = filters;
+  const { status, active_only, city_id, segment_id, user_id, allowed_segment_ids, telegram_group_id, telegram_group_ids } = filters;
 
   // HD tidak punya segment sama sekali
   // jangan tampilkan order apa pun
@@ -86,6 +86,8 @@ async function getAllOrders(filters = {}) {
     sql += ` AND tg.id IN (${placeholders}) AND tg.is_active = 1 AND tg.archived_at IS NULL AND tg.workflow IS NOT NULL`;
     params.push(...groupIds);
   }
+
+  if (active_only === "1") sql += " AND o.status <> 'DONE'";
 
   if (status) {
     sql += ` AND o.status = ?`;

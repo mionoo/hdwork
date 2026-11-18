@@ -85,3 +85,15 @@ test("multi-room query binds group IDs and excludes unavailable groups", async (
   });
   await repo.getAllOrders({ telegram_group_ids: [12, 14], city_id: 4, allowed_segment_ids: [2] });
 });
+
+test("Orders can exclude completed history without changing the default list", async () => {
+  const queries = [];
+  const repo = load("src/repositories/order.repository.js", {
+    "../config/telegram": require("../src/config/telegram"),
+    "../config/database": { query: async (sql) => { queries.push(sql); return [[]]; } },
+  });
+  await repo.getAllOrders({ telegram_group_id: 12, active_only: "1" });
+  await repo.getAllOrders({ telegram_group_id: 12 });
+  assert.match(queries[0], /o\.status <> 'DONE'/);
+  assert.doesNotMatch(queries[1], /o\.status <> 'DONE'/);
+});

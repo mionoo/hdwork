@@ -102,7 +102,11 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
   const [quickCompleteFiles, setQuickCompleteFiles] = useState<File[]>([])
   const [quickCompleteError, setQuickCompleteError] = useState("")
   const [quickActionLoading, setQuickActionLoading] = useState(false)
-  const requestVersion = useRef(0)
+  const listRequest = useRef<{
+    controller: AbortController
+    refreshQueued: boolean
+    task: Promise<void>
+  } | null>(null)
   const messageRequestVersion = useRef(0)
   const knownOrderIds = useRef<Set<number> | null>(null)
   const selectedMessageRef = useRef(selectedMessage)
@@ -113,40 +117,63 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
   const [soundReady, setSoundReady] = useState(orderSoundReady)
   const scope = room ? String(room.id) : monitoredGroups?.map((group) => group.id).join(",")
 
-  async function loadOrders() {
+  function loadOrders(): Promise<void> | undefined {
     if (!token || !scope) return
-    const version = ++requestVersion.current
-
-    try {
-      setLoadError("")
-
-      const data = await getOrders(token, room ? { groupId: scope } : { groupIds: scope.split(",").map(Number) })
-      if (version !== requestVersion.current) return
-      const newOrder = knownOrderIds.current && data.some((order) =>
-        !knownOrderIds.current!.has(order.id) && order.status !== "DONE")
-      knownOrderIds.current = new Set(data.map((order) => order.id))
-      setOrders(data)
-      if (newOrder) {
-        try { playOrderSound(soundSettingsRef.current) }
-        catch { setSoundReady(false) }
-      }
-
-    } catch (error) {
-      if (version !== requestVersion.current) return
-      setOrders([])
-      if (error instanceof Error) {
-        setLoadError(error.message)
-      } else {
-        setLoadError("Gagal mengambil order")
-      }
-    } finally {
-      if (version === requestVersion.current) setLoading(false)
+    if (listRequest.current) {
+      listRequest.current.refreshQueued = true
+      return listRequest.current.task
     }
+
+    const controller = new AbortController()
+    const request = {
+      controller,
+      refreshQueued: false,
+      task: Promise.resolve(),
+    }
+    listRequest.current = request
+    const filters = room ? { groupId: scope } : { groupIds: scope.split(",").map(Number) }
+
+    request.task = (async () => {
+      do {
+        request.refreshQueued = false
+        const timeout = AbortSignal.timeout(15000)
+        try {
+          const data = await getOrders(token, { ...filters, activeOnly: true },
+            AbortSignal.any([controller.signal, timeout]))
+          if (controller.signal.aborted) return
+          const known = knownOrderIds.current
+          const newOrder = known && data.some((order) => !known.has(order.id) && order.status !== "DONE")
+          knownOrderIds.current = new Set(data.map((order) => order.id))
+          setOrders(data)
+          setLoadError("")
+          if (newOrder) {
+            try { playOrderSound(soundSettingsRef.current) }
+            catch { setSoundReady(false) }
+          }
+        } catch (error) {
+          if (controller.signal.aborted) return
+          setLoadError(timeout.aborted ? "Daftar order terlalu lama dimuat."
+            : error instanceof Error ? error.message : "Gagal mengambil order")
+        } finally {
+          if (!controller.signal.aborted) setLoading(false)
+        }
+      } while (request.refreshQueued && !controller.signal.aborted)
+    })().finally(() => {
+      if (listRequest.current === request) listRequest.current = null
+    })
+    return request.task
   }
 
   useEffect(() => {
     knownOrderIds.current = null
-    loadOrders()
+    setOrders([])
+    setLoadError("")
+    setLoading(true)
+    void loadOrders()
+    return () => {
+      listRequest.current?.controller.abort()
+      listRequest.current = null
+    }
   }, [token, scope])
 
   const previousPendingIds = useRef(new Set(pending.map((entry) => entry.order.id)))
@@ -161,6 +188,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
     if (!token || !scope) return
 
     const socket = io(API_BASE_URL, { auth: { token } })
+    let connectedBefore = false
     const refreshOrders = () => {
       void loadOrders()
       const selectedId = selectedMessageRef.current?.id
@@ -179,23 +207,27 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
     }
 
     socket.on("orders:changed", refreshOrders)
-    socket.on("connect", () => void loadOrders())
+    socket.on("connect", () => {
+      // The initial fetch already started. Reconnects refresh missed updates.
+      if (connectedBefore) void loadOrders()
+      connectedBefore = true
+    })
 
     return () => {
       socket.disconnect()
     }
   }, [token, scope])
 
+  const openedOrderId = selectedMessage?.id
+  const latestReplyId = latestIncomingReplyId(selectedMessage?.telegram_conversation)
   useEffect(() => {
-    if (!token || !selectedMessage) return
-    const throughId = latestIncomingReplyId(selectedMessage.telegram_conversation)
-    if (!throughId) return
+    if (!token || !openedOrderId || !latestReplyId) return
     let cancelled = false
-    markTelegramConversationRead(token, selectedMessage.id, throughId).then(() => {
+    markTelegramConversationRead(token, openedOrderId, latestReplyId).then(() => {
       if (!cancelled) void loadOrders()
     }).catch((failure) => { if (!cancelled) setError(failure.message) })
     return () => { cancelled = true }
-  }, [token, selectedMessage])
+  }, [token, openedOrderId, latestReplyId, scope])
 
   function saveSound(settings: OrderSoundSettings) {
     setSoundSettings(settings)
@@ -213,7 +245,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
       await claimOrder(token, order.id)
 
       setSuccessMessage(`Order #${order.id} berhasil di-claim`)
-      await loadOrders()
+      void loadOrders()
     } catch (error) {
       setError(error instanceof Error ? error.message : "Gagal claim order")
     } finally {
@@ -277,7 +309,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
       const notice = orderDeliveryNotice(`Hasil order #${quickResultOrder.id} tersimpan`, result.telegram_delivery)
       setDeliveryWarning(notice.warning ? notice.message : "")
       setSuccessMessage(notice.warning ? "" : notice.message)
-      await loadOrders()
+      void loadOrders()
     } catch (error) {
       setQuickResultError(error instanceof Error ? error.message : "Gagal mengirim result")
     } finally {
@@ -320,7 +352,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
       setQuickCompleteDetail(null)
       setSelectedMessage(null)
       setSelectedOrder(null)
-      await loadOrders()
+      void loadOrders()
     } catch (error) {
       setQuickCompleteError(error instanceof Error ? error.message : "Gagal menyelesaikan order")
     } finally {
@@ -371,7 +403,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
             {error}
           </p>
         )}
-        {loadError && <p role="alert" className="text-destructive">{loadError}</p>}
+        {loadError && <p role="alert" className="text-destructive">{loadError} <button type="button" className="underline" onClick={() => void loadOrders()}>Coba lagi</button></p>}
 
         {successMessage && (
           <p className="rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-400">
