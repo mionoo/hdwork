@@ -48,7 +48,6 @@ import {
   sendResult,
   orderDeliveryNotice,
   type Order,
-  type OrderDetail,
   type OrderRawMessage,
 } from "@/services/order.service"
 
@@ -68,7 +67,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
   monitorEmptyMessage?: string
 }) {
   const { token, user } = useAuth()
-  const { pending, notice: completionNotice, complete: completeTrackedOrder } = useOrderCompletion()
+  const { pending, notice: completionNotice, complete: completeTrackedOrder, acknowledge, applyUpdates, revision } = useOrderCompletion()
   const navigate = useNavigate()
 
   const [orders, setOrders] =
@@ -85,7 +84,8 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
   const [successMessage, setSuccessMessage] = useState("")
   const [deliveryWarning, setDeliveryWarning] = useState("")
 
-  const [claimingOrderId, setClaimingOrderId] = useState<number | null>(null)
+  const claimRequests = useRef(new Set<number>())
+  const [claimingOrderIds, setClaimingOrderIds] = useState(new Set<number>())
 
   const [messageLoadingId, setMessageLoadingId] = useState<number | null>(null)
 
@@ -97,7 +97,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
   const [quickResultFiles, setQuickResultFiles] = useState<File[]>([])
   const [quickResultError, setQuickResultError] = useState("")
   const [quickCompleteOrder, setQuickCompleteOrder] = useState<Order | null>(null)
-  const [quickCompleteDetail, setQuickCompleteDetail] = useState<OrderDetail | null>(null)
+  const [quickCompleteDetail, setQuickCompleteDetail] = useState<{ results: unknown[] } | null>(null)
   const [quickCompleteContent, setQuickCompleteContent] = useState("")
   const [quickCompleteFiles, setQuickCompleteFiles] = useState<File[]>([])
   const [quickCompleteError, setQuickCompleteError] = useState("")
@@ -136,6 +136,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
     request.task = (async () => {
       do {
         request.refreshQueued = false
+        const startedAt = revision()
         const timeout = AbortSignal.timeout(15000)
         try {
           const data = await getOrders(token, { ...filters, activeOnly: true },
@@ -144,7 +145,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
           const known = knownOrderIds.current
           const newOrder = known && data.some((order) => !known.has(order.id) && order.status !== "DONE")
           knownOrderIds.current = new Set(data.map((order) => order.id))
-          setOrders(data)
+          setOrders(applyUpdates(data, startedAt))
           setLoadError("")
           if (newOrder) {
             try { playOrderSound(soundSettingsRef.current) }
@@ -235,21 +236,30 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
   }
 
   async function handleClaim(order: Order) {
-    if (!token) return
+    if (!token || !user || claimRequests.current.has(order.id)) return
+    claimRequests.current.add(order.id)
 
     try {
-      setClaimingOrderId(order.id)
+      setClaimingOrderIds(new Set(claimRequests.current))
       setError("")
       setSuccessMessage("")
 
-      await claimOrder(token, order.id)
+      const claimed = await claimOrder(token, order.id)
+      const updated = {
+        ...order, status: claimed.status as Order["status"],
+        performance_owner_id: Number(claimed.user_id), performance_owner_name: claimed.user_name || user.name,
+      }
+      acknowledge(updated)
+      setOrders((current) => current.map((item) => item.id === order.id ? updated : item))
+      if (selectedOrder?.id === order.id) setSelectedOrder(updated)
 
       setSuccessMessage(`Order #${order.id} berhasil di-claim`)
       void loadOrders()
     } catch (error) {
       setError(error instanceof Error ? error.message : "Gagal claim order")
     } finally {
-      setClaimingOrderId(null)
+      claimRequests.current.delete(order.id)
+      setClaimingOrderIds(new Set(claimRequests.current))
     }
   }
 
@@ -305,6 +315,10 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
       setQuickActionLoading(true)
       setQuickResultError("")
       const result = await sendResult(token, quickResultOrder.id, quickResultContent.trim(), quickResultFiles)
+      const updated = { ...quickResultOrder, has_results: true }
+      acknowledge(updated)
+      setOrders((current) => current.map((item) => item.id === updated.id ? updated : item))
+      if (selectedOrder?.id === updated.id) setSelectedOrder(updated)
       setQuickResultOrder(null)
       const notice = orderDeliveryNotice(`Hasil order #${quickResultOrder.id} tersimpan`, result.telegram_delivery)
       setDeliveryWarning(notice.warning ? notice.message : "")
@@ -324,7 +338,9 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
       setQuickCompleteError("")
       setQuickCompleteContent("")
       setQuickCompleteFiles([])
-      setQuickCompleteDetail(await getOrderDetail(token, order.id))
+      setQuickCompleteDetail(typeof order.has_results === "undefined"
+        ? await getOrderDetail(token, order.id)
+        : { results: order.has_results ? [{}] : [] })
       setQuickCompleteOrder(order)
     } catch (error) {
       setError(error instanceof Error ? error.message : "Gagal memuat data order")
@@ -348,6 +364,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
       setSuccessMessage("")
       setDeliveryWarning("")
       await completeTrackedOrder(quickCompleteOrder, needsResult ? quickCompleteContent.trim() : "", needsResult ? quickCompleteFiles : [])
+      setOrders((current) => current.filter((item) => item.id !== quickCompleteOrder.id))
       setQuickCompleteOrder(null)
       setQuickCompleteDetail(null)
       setSelectedMessage(null)
@@ -560,10 +577,10 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
                         {user?.role === "HD" && order.status === "WAITING" && (
                           <Button
                             size="sm"
-                            disabled={claimingOrderId === order.id}
+                            disabled={claimingOrderIds.has(order.id)}
                             onClick={() => handleClaim(order)}
                           >
-                            {claimingOrderId === order.id ? "Claim..." : "Claim"}
+                            {claimingOrderIds.has(order.id) ? "Menyimpan…" : "Claim"}
                           </Button>
                         )}
                         <Button

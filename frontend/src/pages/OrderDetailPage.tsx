@@ -108,21 +108,22 @@ export default function OrderDetailPage() {
     Record<string, string>
   >({});
 
-  async function loadDetail() {
+  async function loadDetail(background = false) {
     if (!token || !id) return;
 
     try {
-      setLoading(true);
+      if (!background) setLoading(true);
       setError("");
 
       const data = await getOrderDetail(token, Number(id));
 
       setDetail(data);
     } catch (error) {
-      if (error instanceof Error) {
-        setError(error.message);
+      const message = error instanceof Error ? error.message : "Gagal mengambil detail order";
+      if (background) {
+        setResultNotice({ warning: true, message: `Order tersimpan. Detail belum dapat diperbarui. ${message}` });
       } else {
-        setError("Gagal mengambil detail order");
+        setError(message);
       }
     } finally {
       setLoading(false);
@@ -398,7 +399,10 @@ export default function OrderDetailPage() {
       );
 
       setIsCompleteDialogOpen(false);
-      await loadDetail();
+      setDetail((current) => current ? {
+        ...current, order: { ...current.order, status: "DONE" },
+      } : current);
+      void loadDetail(true);
     } catch (error) {
       setCompleteError(
         error instanceof Error

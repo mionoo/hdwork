@@ -2,6 +2,7 @@ import { API_URL } from "@/config/api"
 
 export type Order = {
   id: number
+  has_results?: boolean | number
   ticket_number: string | null
   service_number: string | null
   sto: string | null

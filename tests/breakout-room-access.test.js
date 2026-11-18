@@ -95,5 +95,6 @@ test("Orders can exclude completed history without changing the default list", a
   await repo.getAllOrders({ telegram_group_id: 12, active_only: "1" });
   await repo.getAllOrders({ telegram_group_id: 12 });
   assert.match(queries[0], /o\.status <> 'DONE'/);
+  assert.match(queries[0], /EXISTS\(SELECT 1 FROM order_results result WHERE result\.order_id = o\.id\) AS has_results/);
   assert.doesNotMatch(queries[1], /o\.status <> 'DONE'/);
 });

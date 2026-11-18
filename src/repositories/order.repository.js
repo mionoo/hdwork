@@ -22,6 +22,7 @@ async function getAllOrders(filters = {}) {
   let sql = `
     SELECT
       o.id,
+      EXISTS(SELECT 1 FROM order_results result WHERE result.order_id = o.id) AS has_results,
       ${filters.viewer_user_id === undefined ? "0" : `(
         SELECT COUNT(*) FROM order_telegram_messages tm
         WHERE tm.order_id = o.id AND tm.kind = 'reply' AND tm.is_outbound = 0
