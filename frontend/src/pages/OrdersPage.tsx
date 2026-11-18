@@ -1,3 +1,4 @@
+import { useUploadFiles } from "@/hooks/useUploadFiles"
 import {
   useEffect,
   useRef,
@@ -101,6 +102,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
   const [quickCompleteContent, setQuickCompleteContent] = useState("")
   const [quickCompleteFiles, setQuickCompleteFiles] = useState<File[]>([])
   const [quickCompleteError, setQuickCompleteError] = useState("")
+  const quickUpload = useUploadFiles()
   const [quickActionLoading, setQuickActionLoading] = useState(false)
   const listRequest = useRef<{
     controller: AbortController
@@ -283,6 +285,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
   }
 
   function addQuickFiles(files: File[], mode: "result" | "complete") {
+    if (quickUpload.isPreparing()) return
     const current = mode === "result" ? quickResultFiles : quickCompleteFiles
     const setFiles = mode === "result" ? setQuickResultFiles : setQuickCompleteFiles
     const setFileError = mode === "result" ? setQuickResultError : setQuickCompleteError
@@ -293,7 +296,9 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
     else if (files.length > availableSlots) setFileError("Maksimal 10 file dalam satu result")
     else setFileError("")
 
-    setFiles((currentFiles) => [...currentFiles, ...validFiles.slice(0, Math.max(availableSlots, 0))])
+    void quickUpload.capture(validFiles.slice(0, Math.max(availableSlots, 0)), (snapshots) => {
+      setFiles((currentFiles) => [...currentFiles, ...snapshots].slice(0, 10))
+    }, setFileError)
   }
 
   function openQuickResult(order: Order) {
@@ -305,7 +310,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
 
   async function handleQuickResult(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!token || !quickResultOrder) return
+    if (!token || !quickResultOrder || quickUpload.isPreparing()) return
     if (!quickResultContent.trim() && quickResultFiles.length === 0) {
       setQuickResultError("Isi hasil pekerjaan atau pilih minimal satu file")
       return
@@ -353,6 +358,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
     event.preventDefault()
     if (!token || !quickCompleteOrder || !quickCompleteDetail) return
     const needsResult = quickCompleteDetail.results.length === 0
+    if (quickUpload.isPreparing()) return
     if (needsResult && !quickCompleteContent.trim() && quickCompleteFiles.length === 0) {
       setQuickCompleteError("Isi hasil pekerjaan atau pilih minimal satu file")
       return
@@ -672,7 +678,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
       <Dialog
         open={Boolean(quickResultOrder)}
         onOpenChange={(open) => {
-          if (!open && !quickActionLoading) setQuickResultOrder(null)
+          if (!open && !quickActionLoading && !quickUpload.preparing) setQuickResultOrder(null)
         }}
       >
         <DialogContent>
@@ -698,15 +704,18 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
               value={quickResultContent}
               onChange={(event) => setQuickResultContent(event.target.value)}
               placeholder="Tulis hasil pekerjaan"
-              disabled={quickActionLoading}
+              disabled={quickActionLoading || quickUpload.preparing}
             />
             <div className="space-y-2">
               <input
                 type="file"
                 multiple
-                disabled={quickActionLoading}
+                disabled={quickActionLoading || quickUpload.preparing}
                 className="block w-full cursor-pointer rounded-lg border bg-background px-3 py-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-muted file:px-3 file:py-1 file:text-sm file:font-medium"
-                onChange={(event) => addQuickFiles(Array.from(event.target.files || []), "result")}
+                onChange={(event) => {
+                      addQuickFiles(Array.from(event.currentTarget.files || []), "result")
+                      event.currentTarget.value = ""
+                    }}
               />
               <p className="text-xs text-muted-foreground">Maksimal 10 file, masing-masing 10 MB. File dapat dipilih atau di-copy-paste.</p>
               {quickResultFiles.length > 0 && (
@@ -715,10 +724,11 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
                 </div>
               )}
             </div>
+            {quickUpload.preparing && <p role="status" className="text-sm text-muted-foreground">Menyiapkan lampiran…</p>}
             {quickResultError && <p className="text-sm text-destructive">{quickResultError}</p>}
             <DialogFooter>
-              <Button type="button" variant="outline" disabled={quickActionLoading} onClick={() => setQuickResultOrder(null)}>Batal</Button>
-              <Button type="submit" disabled={quickActionLoading || (!quickResultContent.trim() && quickResultFiles.length === 0)}>{quickActionLoading ? "Menyimpan…" : "Kirim Hasil"}</Button>
+              <Button type="button" variant="outline" disabled={quickActionLoading || quickUpload.preparing} onClick={() => setQuickResultOrder(null)}>Batal</Button>
+              <Button type="submit" disabled={quickActionLoading || quickUpload.preparing || (!quickResultContent.trim() && quickResultFiles.length === 0)}>{quickActionLoading ? "Menyimpan…" : "Kirim Hasil"}</Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -727,7 +737,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
       <Dialog
         open={Boolean(quickCompleteOrder)}
         onOpenChange={(open) => {
-          if (!open && !quickActionLoading) {
+          if (!open && !quickActionLoading && !quickUpload.preparing) {
             setQuickCompleteOrder(null)
             setQuickCompleteDetail(null)
           }
@@ -760,24 +770,28 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
                   value={quickCompleteContent}
                   onChange={(event) => setQuickCompleteContent(event.target.value)}
                   placeholder="Tulis hasil pekerjaan"
-                  disabled={quickActionLoading}
+                  disabled={quickActionLoading || quickUpload.preparing}
                 />
                 <div className="space-y-2">
                   <input
                     type="file"
                     multiple
-                    disabled={quickActionLoading}
+                    disabled={quickActionLoading || quickUpload.preparing}
                     className="block w-full cursor-pointer rounded-lg border bg-background px-3 py-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-muted file:px-3 file:py-1 file:text-sm file:font-medium"
-                    onChange={(event) => addQuickFiles(Array.from(event.target.files || []), "complete")}
+                    onChange={(event) => {
+                      addQuickFiles(Array.from(event.currentTarget.files || []), "complete")
+                      event.currentTarget.value = ""
+                    }}
                   />
                   {quickCompleteFiles.length > 0 && <div className="rounded-lg border bg-muted/30 p-3 text-sm">{quickCompleteFiles.map((file) => <p key={`${file.name}-${file.lastModified}-${file.size}`} className="break-all">📎 {file.name}</p>)}</div>}
                 </div>
               </>
             )}
+            {quickUpload.preparing && <p role="status" className="text-sm text-muted-foreground">Menyiapkan lampiran…</p>}
             {quickCompleteError && <p className="text-sm text-destructive">{quickCompleteError}</p>}
             <DialogFooter>
-              <Button type="button" variant="outline" disabled={quickActionLoading} onClick={() => { setQuickCompleteOrder(null); setQuickCompleteDetail(null) }}>Batal</Button>
-              <Button type="submit" disabled={quickActionLoading}>{quickActionLoading ? "Menyimpan…" : "Selesaikan order"}</Button>
+              <Button type="button" variant="outline" disabled={quickActionLoading || quickUpload.preparing} onClick={() => { setQuickCompleteOrder(null); setQuickCompleteDetail(null) }}>Batal</Button>
+              <Button type="submit" disabled={quickActionLoading || quickUpload.preparing}>{quickActionLoading ? "Menyimpan…" : "Selesaikan order"}</Button>
             </DialogFooter>
           </form>
         </DialogContent>

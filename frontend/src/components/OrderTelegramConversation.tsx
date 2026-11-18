@@ -1,3 +1,4 @@
+import { useUploadFiles } from "@/hooks/useUploadFiles"
 import { useEffect, useId, useRef, useState, type ClipboardEvent, type FormEvent } from "react"
 import { Reply, ZoomIn, ZoomOut } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -152,6 +153,7 @@ function ReplyComposer({ message, sending, onSend, onCancel }: {
   onCancel: () => void
 }) {
   const id = useId()
+  const upload = useUploadFiles()
   const input = useRef<HTMLTextAreaElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const [content, setContent] = useState("")
@@ -166,12 +168,14 @@ function ReplyComposer({ message, sending, onSend, onCancel }: {
   }, [file])
 
   function selectFile(attachment: File | null) {
+    if (upload.isPreparing()) return
     if (attachment && (!attachment.size || attachment.size > 10 * 1024 * 1024)) {
       setError("Pilih file berisi data dengan ukuran maksimal 10 MB.")
       return
     }
     setError("")
-    setFile(attachment)
+    if (!attachment) { setFile(null); return }
+    void upload.capture([attachment], ([snapshot]) => setFile(snapshot), setError)
   }
 
   function pasteAttachment(event: ClipboardEvent<HTMLFormElement>) {
@@ -191,7 +195,7 @@ function ReplyComposer({ message, sending, onSend, onCancel }: {
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-    if (sending || (!content.trim() && !file) || content.trim().length > maxLength) return
+    if (sending || upload.isPreparing() || (!content.trim() && !file) || content.trim().length > maxLength) return
     setError("")
     try { await onSend(content.trim(), file) }
     catch (failure) {
@@ -206,11 +210,11 @@ function ReplyComposer({ message, sending, onSend, onCancel }: {
         <span className="line-clamp-2 wrap-anywhere">{message.content || message.file_name || "Lampiran Telegram"}</span>
       </blockquote>
       <Textarea ref={input} aria-label="Tulis balasan" placeholder="Tulis balasan…" rows={3}
-        value={content} disabled={sending} aria-describedby={`${id}-paste-hint`} onChange={(event) => setContent(event.target.value)} />
+        value={content} disabled={sending || upload.preparing} aria-describedby={`${id}-paste-hint`} onChange={(event) => setContent(event.target.value)} />
       <p id={`${id}-paste-hint`} className="text-xs text-muted-foreground">Tempel gambar atau file dari clipboard dengan Ctrl+V / ⌘V, atau pilih lampiran.</p>
       <div className="space-y-1">
         <label htmlFor={`${id}-file`} className="block text-xs font-medium">Lampiran opsional · 1 file, maks. 10 MB</label>
-        <input ref={fileInput} id={`${id}-file`} type="file" disabled={sending} className="block w-full min-w-0 text-sm file:mr-2 file:rounded-md file:border file:bg-background file:px-2 file:py-1"
+        <input ref={fileInput} id={`${id}-file`} type="file" disabled={sending || upload.preparing} className="block w-full min-w-0 text-sm file:mr-2 file:rounded-md file:border file:bg-background file:px-2 file:py-1"
           onChange={(event) => {
             selectFile(event.currentTarget.files?.[0] ?? null)
             event.currentTarget.value = ""
@@ -220,16 +224,17 @@ function ReplyComposer({ message, sending, onSend, onCancel }: {
             {preview && <img src={preview} alt="Pratinjau lampiran balasan" className="max-h-40 max-w-full rounded-md object-contain" />}
             <div className="flex flex-wrap items-center gap-2">
               <span role="status" className="min-w-0 text-sm wrap-anywhere">{file.name} · {(file.size / 1024).toLocaleString("id-ID", { maximumFractionDigits: 1 })} KB</span>
-              <Button type="button" size="sm" variant="outline" disabled={sending} onClick={() => selectFile(null)}>Hapus lampiran</Button>
+              <Button type="button" size="sm" variant="outline" disabled={sending || upload.preparing} onClick={() => selectFile(null)}>Hapus lampiran</Button>
             </div>
           </div>
         )}
       </div>
       {content.trim().length > maxLength && <p className="text-sm text-destructive">Balasan maksimal {maxLength} karakter.</p>}
+      {upload.preparing && <p role="status" className="text-sm text-muted-foreground">Menyiapkan lampiran…</p>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       <div className="flex flex-wrap justify-end gap-2">
-        <Button type="button" size="sm" variant="outline" disabled={sending} onClick={onCancel}>Batal</Button>
-        <Button type="submit" size="sm" disabled={sending || (!content.trim() && !file) || content.trim().length > maxLength}>
+        <Button type="button" size="sm" variant="outline" disabled={sending || upload.preparing} onClick={onCancel}>Batal</Button>
+        <Button type="submit" size="sm" disabled={sending || upload.preparing || (!content.trim() && !file) || content.trim().length > maxLength}>
           {sending ? "Mengirim…" : "Kirim balasan"}
         </Button>
       </div>

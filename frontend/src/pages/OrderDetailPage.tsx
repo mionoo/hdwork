@@ -1,3 +1,4 @@
+import { useUploadFiles } from "@/hooks/useUploadFiles";
 import { useEffect, useRef, useState } from "react";
 
 import { useLocation, useNavigate, useParams } from "react-router-dom";
@@ -66,6 +67,7 @@ export default function OrderDetailPage() {
   const [error, setError] = useState("");
   const [resultNotice, setResultNotice] = useState<ReturnType<typeof orderDeliveryNotice> | null>(null);
 
+  const upload = useUploadFiles();
   const [actionLoading, setActionLoading] = useState(false);
 
   const [isReassignDialogOpen, setIsReassignDialogOpen] = useState(false);
@@ -290,6 +292,7 @@ export default function OrderDetailPage() {
   }
 
   function addResultFiles(files: File[]) {
+    if (upload.isPreparing()) return;
     const maxFileSize = 10 * 1024 * 1024;
     const availableSlots = 10 - resultFiles.length;
 
@@ -303,10 +306,9 @@ export default function OrderDetailPage() {
       setResultError("");
     }
 
-    setResultFiles((currentFiles) => [
-      ...currentFiles,
-      ...validFiles.slice(0, Math.max(availableSlots, 0)),
-    ]);
+    void upload.capture(validFiles.slice(0, Math.max(availableSlots, 0)), (snapshots) => {
+      setResultFiles((currentFiles) => [...currentFiles, ...snapshots].slice(0, 10));
+    }, setResultError);
   }
 
   function handleResultPaste(event: React.ClipboardEvent<HTMLFormElement>) {
@@ -323,7 +325,7 @@ export default function OrderDetailPage() {
   ) {
     event.preventDefault();
 
-    if (!token || !id) return;
+    if (!token || !id || upload.isPreparing()) return;
 
     if (!resultContent.trim() && resultFiles.length === 0) {
       setResultError("Isi hasil pekerjaan atau pilih minimal satu file");
@@ -356,6 +358,7 @@ export default function OrderDetailPage() {
   }
 
   function addCompleteFiles(files: File[]) {
+    if (upload.isPreparing()) return;
     const maxFileSize = 10 * 1024 * 1024;
     const availableSlots = 10 - completeFiles.length;
     const validFiles = files.filter((file) => file.size <= maxFileSize);
@@ -368,10 +371,9 @@ export default function OrderDetailPage() {
       setCompleteError("");
     }
 
-    setCompleteFiles((currentFiles) => [
-      ...currentFiles,
-      ...validFiles.slice(0, Math.max(availableSlots, 0)),
-    ]);
+    void upload.capture(validFiles.slice(0, Math.max(availableSlots, 0)), (snapshots) => {
+      setCompleteFiles((currentFiles) => [...currentFiles, ...snapshots].slice(0, 10));
+    }, setCompleteError);
   }
 
   function handleCompletePaste(event: React.ClipboardEvent<HTMLFormElement>) {
@@ -386,7 +388,7 @@ export default function OrderDetailPage() {
   function handleComplete(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!token || !id || !detail || isCompleting) return;
+    if (!token || !id || !detail || isCompleting || upload.isPreparing()) return;
 
     const needsResult = detail.results.length === 0;
 
@@ -812,7 +814,7 @@ export default function OrderDetailPage() {
       {isResultDialogOpen && (
         <Dialog
           open={isResultDialogOpen}
-          onOpenChange={setIsResultDialogOpen}
+          onOpenChange={(open) => { if (!upload.preparing) setIsResultDialogOpen(open); }}
         >
           <DialogContent>
             <DialogHeader>
@@ -838,7 +840,7 @@ export default function OrderDetailPage() {
                     value={resultContent}
                     onChange={(event) => setResultContent(event.target.value)}
                     placeholder="Tulis hasil atau update pekerjaan di sini"
-                    disabled={actionLoading}
+                    disabled={actionLoading || upload.preparing}
                   />
 
                   <p className="text-sm text-muted-foreground">
@@ -856,10 +858,11 @@ export default function OrderDetailPage() {
                     type="file"
                     multiple
                     className="block w-full cursor-pointer rounded-lg border bg-background px-3 py-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-muted file:px-3 file:py-1 file:text-sm file:font-medium"
-                    disabled={actionLoading}
-                    onChange={(event) =>
-                      addResultFiles(Array.from(event.target.files || []))
-                    }
+                    disabled={actionLoading || upload.preparing}
+                    onChange={(event) => {
+                      addResultFiles(Array.from(event.currentTarget.files || []));
+                      event.currentTarget.value = "";
+                    }}
                   />
 
                   <p className="text-xs text-muted-foreground">
@@ -879,7 +882,7 @@ export default function OrderDetailPage() {
                           variant="ghost"
                           size="sm"
                           onClick={() => setResultFiles([])}
-                          disabled={actionLoading}
+                          disabled={actionLoading || upload.preparing}
                         >
                           Hapus semua
                         </Button>
@@ -912,6 +915,7 @@ export default function OrderDetailPage() {
                   )}
                 </div>
 
+                {upload.preparing && <p role="status" className="text-sm text-muted-foreground">Menyiapkan lampiran…</p>}
                 {resultError && (
                   <p className="text-sm text-destructive">{resultError}</p>
                 )}
@@ -921,7 +925,7 @@ export default function OrderDetailPage() {
                     type="button"
                     variant="outline"
                     onClick={() => setIsResultDialogOpen(false)}
-                    disabled={actionLoading}
+                    disabled={actionLoading || upload.preparing}
                   >
                     Batal
                   </Button>
@@ -929,7 +933,7 @@ export default function OrderDetailPage() {
                   <Button
                     type="submit"
                     disabled={
-                      actionLoading ||
+                      actionLoading || upload.preparing ||
                       (!resultContent.trim() && resultFiles.length === 0)
                     }
                   >
@@ -944,7 +948,7 @@ export default function OrderDetailPage() {
       {isCompleteDialogOpen && (
         <Dialog
           open={isCompleteDialogOpen}
-          onOpenChange={setIsCompleteDialogOpen}
+          onOpenChange={(open) => { if (!upload.preparing) setIsCompleteDialogOpen(open); }}
         >
           <DialogContent>
             <DialogHeader>
@@ -973,7 +977,7 @@ export default function OrderDetailPage() {
                       value={completeContent}
                       onChange={(event) => setCompleteContent(event.target.value)}
                       placeholder="Tulis ringkasan hasil penyelesaian"
-                      disabled={actionLoading}
+                      disabled={actionLoading || upload.preparing}
                     />
                   </div>
 
@@ -986,10 +990,11 @@ export default function OrderDetailPage() {
                       type="file"
                       multiple
                       className="block w-full cursor-pointer rounded-lg border bg-background px-3 py-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-muted file:px-3 file:py-1 file:text-sm file:font-medium"
-                      disabled={actionLoading}
-                      onChange={(event) =>
-                        addCompleteFiles(Array.from(event.target.files || []))
-                      }
+                      disabled={actionLoading || upload.preparing}
+                      onChange={(event) => {
+                      addCompleteFiles(Array.from(event.currentTarget.files || []));
+                      event.currentTarget.value = "";
+                    }}
                     />
                     <p className="text-xs text-muted-foreground">
                       Hasil berupa teks atau minimal satu file wajib diisi. File dapat
@@ -1025,7 +1030,8 @@ export default function OrderDetailPage() {
                 </>
               )}
 
-              {completeError && (
+              {upload.preparing && <p role="status" className="text-sm text-muted-foreground">Menyiapkan lampiran…</p>}
+                {completeError && (
                 <p className="text-sm text-destructive">{completeError}</p>
               )}
               <DialogFooter>
@@ -1033,7 +1039,7 @@ export default function OrderDetailPage() {
                   type="button"
                   variant="outline"
                   onClick={() => setIsCompleteDialogOpen(false)}
-                  disabled={actionLoading}
+                  disabled={actionLoading || upload.preparing}
                 >
                   Batal
                 </Button>
@@ -1041,7 +1047,7 @@ export default function OrderDetailPage() {
                 <Button
                   type="submit"
                   disabled={
-                    actionLoading ||
+                    actionLoading || upload.preparing ||
                     (detail.results.length === 0 &&
                       !completeContent.trim() &&
                       completeFiles.length === 0)
