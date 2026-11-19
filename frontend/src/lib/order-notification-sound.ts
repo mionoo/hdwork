@@ -3,11 +3,24 @@ export const orderSoundChoices = [
   { id: "confirmation", name: "Nada konfirmasi", duration: "0,4 detik" },
   { id: "digital", name: "Bip digital", duration: "0,3 detik" },
   { id: "bell", name: "Lonceng ringan", duration: "1 detik" },
+  { id: "double-ding", name: "Ding ganda", duration: "0,6 detik" },
+  { id: "rising", name: "Tiga nada naik", duration: "0,8 detik" },
+  { id: "knock", name: "Ketuk digital", duration: "0,3 detik" },
 ] as const
 
 export type OrderSound = typeof orderSoundChoices[number]["id"] | "none"
 export type OrderSoundSettings = { sound: OrderSound; volume: number }
 const defaultSettings: OrderSoundSettings = { sound: "pop", volume: 0.5 }
+const outputLevels: Record<Exclude<OrderSound, "none">, number> = {
+  pop: 0.42,
+  confirmation: 0.42,
+  digital: 0.42,
+  // Both bell tones start together. Their summed envelope peaks at 1.3.
+  bell: 0.62,
+  "double-ding": 0.46,
+  rising: 0.46,
+  knock: 0.54,
+}
 let audioContext: AudioContext | null = null
 let lastPlayback: GainNode | null = null
 
@@ -41,7 +54,7 @@ export function playOrderSound({ sound, volume }: OrderSoundSettings) {
   if (!context || context.state !== "running") throw new Error("Aktifkan suara agar order baru terdengar.")
   lastPlayback?.disconnect()
   const output = context.createGain()
-  output.gain.value = volume * 0.18
+  output.gain.value = volume * outputLevels[sound]
   output.connect(context.destination)
   lastPlayback = output
   const start = context.currentTime
@@ -78,6 +91,19 @@ export function playOrderSound({ sound, volume }: OrderSoundSettings) {
     case "bell":
       tone(880, 0, 1)
       tone(1760, 0, 0.65, 0.3)
+      break
+    case "double-ding":
+      tone(988, 0, 0.23)
+      tone(1319, 0.27, 0.33)
+      break
+    case "rising":
+      tone(660, 0, 0.2)
+      tone(880, 0.22, 0.2)
+      tone(1175, 0.44, 0.36)
+      break
+    case "knock":
+      tone(560, 0, 0.1, 1, 340)
+      tone(560, 0.15, 0.13, 0.8, 380)
       break
   }
 }
