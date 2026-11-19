@@ -12,6 +12,7 @@ import { API_BASE_URL } from "@/config/api"
 import { useNavigate } from "react-router-dom"
 
 import { Button } from "@/components/ui/button"
+import OrderCompletionStatus from "@/components/OrderCompletionStatus"
 import OrderStatusBadge from "@/components/OrderStatusBadge"
 import OrderSourcePhotos from "@/components/OrderSourcePhotos"
 import OrderTelegramConversation from "@/components/OrderTelegramConversation"
@@ -68,7 +69,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
   monitorEmptyMessage?: string
 }) {
   const { token, user } = useAuth()
-  const { pending, complete: completeTrackedOrder, acknowledge, applyUpdates, revision } = useOrderCompletion()
+  const { pending, entries, retry, complete: completeTrackedOrder, acknowledge, applyUpdates, revision } = useOrderCompletion()
   const navigate = useNavigate()
 
   const [orders, setOrders] =
@@ -379,23 +380,30 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
   }
 
   const groupIds = new Set(scope?.split(",").map(Number) ?? [])
-  const pendingInScope = new Map(pending.filter((entry) => groupIds.has(Number(entry.order.telegram_group_id)))
+  const completionsInScope = new Map(entries.filter((entry) => groupIds.has(Number(entry.order.telegram_group_id)))
     .map((entry) => [entry.order.id, entry]))
-  const displayedOrders = applyUpdates(orders, -1).map((order) => pendingInScope.get(order.id)?.order ?? order)
-  for (const entry of pendingInScope.values()) {
-    if (!displayedOrders.some((order) => order.id === entry.order.id)) displayedOrders.unshift(entry.order)
+  const displayedOrders = applyUpdates(orders, -1)
+  for (const entry of completionsInScope.values()) {
+    if (displayedOrders.some((order) => order.id === entry.order.id)) continue
+    // Active-only refreshes omit completed orders. Insert them back in date order.
+    const position = displayedOrders.findIndex((order) => Date.parse(order.created_at) < Date.parse(entry.order.created_at))
+    displayedOrders.splice(position < 0 ? displayedOrders.length : position, 0, entry.order)
   }
-  const visibleOrders = displayedOrders.filter((order) => order.status !== "DONE" || pendingInScope.has(order.id))
+  const visibleOrders = displayedOrders.filter((order) => order.status !== "DONE" || completionsInScope.has(order.id))
+  const activeOrders = visibleOrders.filter((order) => completionsInScope.get(order.id)?.state !== "completed")
   const countsByGroup = new Map<number, number>()
   if (monitoredGroups) {
-    for (const order of visibleOrders) {
+    for (const order of activeOrders) {
       const groupId = Number(order.telegram_group_id)
       countsByGroup.set(groupId, (countsByGroup.get(groupId) ?? 0) + 1)
     }
   }
-  const canQuickAction = (order: Order) => !pending.some((entry) => entry.order.id === order.id) && user?.role === "HD"
-    && order.performance_owner_id === user.id
-    && (order.status === "IN_PROGRESS" || order.status === "ESCALATED")
+  function canQuickAction(selected: Order) {
+    const order = activeOrders.find((item) => item.id === selected.id)
+    return order && !completionsInScope.has(order.id) && user?.role === "HD"
+      && order.performance_owner_id === user.id
+      && (order.status === "IN_PROGRESS" || order.status === "ESCALATED")
+  }
 
   return (
     <div className="min-h-screen bg-muted p-6">
@@ -447,7 +455,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
           </CardHeader>
 
           <CardContent>
-            {!loadError && <p className="mb-3 text-sm text-muted-foreground" role="status">Menampilkan {visibleOrders.length} order aktif</p>}
+            {!loadError && <p className="mb-3 text-sm text-muted-foreground" role="status">Menampilkan {activeOrders.length} order aktif</p>}
             {monitoredGroups && <ul aria-label="Grup dipantau" className="mb-3 flex flex-wrap gap-2">
               {monitoredGroups.map((group) => (
                 <li key={group.id} className="rounded-md border bg-muted px-2.5 py-1 text-sm wrap-anywhere">
@@ -506,6 +514,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
                 <tbody>
 
                   {visibleOrders.map((order) => {
+                    const completion = completionsInScope.get(order.id)
                     const isMyOrder = user?.role === "HD"
                       && order.performance_owner_id != null
                       && Number(order.performance_owner_id) === Number(user.id)
@@ -540,10 +549,8 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
                       </td>
 
                       <td className="p-3">
-                        {pendingInScope.has(order.id)
-                          ? <span role="status" className="text-sm font-medium text-primary whitespace-nowrap">
-                              Menyimpan…
-                            </span>
+                        {completion
+                          ? <OrderCompletionStatus entry={completion} />
                           : <OrderStatusBadge status={order.status} />}
                       </td>
 
@@ -566,7 +573,12 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
 
                       <td className="p-3">
                         <div className="flex items-center gap-2">
-                        {user?.role === "HD" && order.status === "WAITING" && (
+                        {completion?.state === "failed" && (
+                          <Button size="sm" variant="outline" aria-label={`Coba lagi order #${order.id}`} onClick={() => retry(order.id)}>
+                            Coba lagi
+                          </Button>
+                        )}
+                        {!completion && user?.role === "HD" && order.status === "WAITING" && (
                           <Button
                             size="sm"
                             disabled={claimingOrderIds.has(order.id)}
@@ -578,7 +590,7 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
                         <Button
                           size="icon-sm"
                           variant="outline"
-                          disabled={messageLoadingId === order.id || pendingInScope.has(order.id)}
+                          disabled={messageLoadingId === order.id}
                           onClick={() => handleOpenMessage(order)}
                           aria-label={`Lihat pesan order #${order.id}${Number(order.unread_reply_count) > 0 ? `, ${order.unread_reply_count} balasan baru` : ""}`}
                           title={Number(order.unread_reply_count) > 0 ? `${order.unread_reply_count} balasan baru` : "Lihat pesan asli"}
@@ -594,7 +606,6 @@ export default function OrdersPage({ room, onLeaveRoom, controls, picker, monito
                         <Button
                           size="sm"
                           variant="outline"
-                          disabled={pendingInScope.has(order.id)}
                           onClick={() =>
                             navigate(
                               `/orders/${order.id}`,

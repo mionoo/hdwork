@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import OrderCompletionStatus from "@/components/OrderCompletionStatus";
 import OrderStatusBadge from "@/components/OrderStatusBadge";
 
 import { useOrderCompletion } from "@/contexts/OrderCompletionContext";
@@ -54,9 +55,10 @@ function formatDateTime(value: string | null | undefined) {
 
 export default function OrderDetailPage() {
   const { token, user } = useAuth();
-  const { pending, complete: completeTrackedOrder } = useOrderCompletion();
+  const { entries, retry, complete: completeTrackedOrder } = useOrderCompletion();
   const { id } = useParams();
-  const isCompleting = pending.some((entry) => entry.order.id === Number(id));
+  const completion = entries.find((entry) => entry.order.id === Number(id));
+  const isCompleting = completion?.state === "saving";
   const navigate = useNavigate();
   const { roomId, monitoring } = useLocation().state ?? {};
 
@@ -138,11 +140,12 @@ export default function OrderDetailPage() {
 
   const previousCompletion = useRef({ id, pending: isCompleting });
   useEffect(() => {
-    if (previousCompletion.current.id === id && previousCompletion.current.pending && !isCompleting) {
+    if (previousCompletion.current.id === id && previousCompletion.current.pending && completion?.state === "completed") {
+      setDetail((current) => current && { ...current, order: { ...current.order, status: "DONE" } });
       void loadDetail(true);
     }
     previousCompletion.current = { id, pending: isCompleting };
-  }, [isCompleting, id]);
+  }, [isCompleting, completion?.state, id]);
 
   useEffect(() => {
     if (!token || !detail) return;
@@ -388,7 +391,7 @@ export default function OrderDetailPage() {
   function handleComplete(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!token || !id || !detail || isCompleting || upload.isPreparing()) return;
+    if (!token || !id || !detail || completion || upload.isPreparing()) return;
 
     const needsResult = detail.results.length === 0;
 
@@ -436,11 +439,11 @@ export default function OrderDetailPage() {
   const { order } = detail;
 
   const canReassign =
-    !isCompleting && order.status === "IN_PROGRESS" &&
+    !completion && order.status === "IN_PROGRESS" &&
     order.performance_owner_id === user?.id;
 
   const canSendResult =
-    !isCompleting && (order.status === "IN_PROGRESS" || order.status === "ESCALATED") &&
+    !completion && (order.status === "IN_PROGRESS" || order.status === "ESCALATED") &&
     order.performance_owner_id === user?.id;
 
   return (
@@ -515,7 +518,12 @@ export default function OrderDetailPage() {
             <div>
               <div className="text-sm text-muted-foreground">Status</div>
               <div className="mt-1">
-                <span>{isCompleting ? "Menyimpan…" : <OrderStatusBadge status={order.status} />}</span>
+                {completion ? <OrderCompletionStatus entry={completion} /> : <OrderStatusBadge status={order.status} />}
+                {completion?.state === "failed" && (
+                  <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => retry(order.id)}>
+                    Coba lagi
+                  </Button>
+                )}
               </div>
             </div>
 
